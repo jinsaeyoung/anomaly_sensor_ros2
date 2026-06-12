@@ -1,0 +1,2 @@
+Invoking command in '/home/xd/ros2_ws/src/thl100_sensor/build/thl100_sensor': /usr/bin/cmake /home/xd/ros2_ws/src/thl100_sensor -DCATKIN_INSTALL_INTO_PREFIX_ROOT=0 -DCMAKE_INSTALL_PREFIX=/home/xd/ros2_ws/src/thl100_sensor/install/thl100_sensor
+Invoked command in '/home/xd/ros2_ws/src/thl100_sensor/build/thl100_sensor' returned '1': /usr/bin/cmake /home/xd/ros2_ws/src/thl100_sensor -DCATKIN_INSTALL_INTO_PREFIX_ROOT=0 -DCMAKE_INSTALL_PREFIX=/home/xd/ros2_ws/src/thl100_sensor/install/thl100_sensor

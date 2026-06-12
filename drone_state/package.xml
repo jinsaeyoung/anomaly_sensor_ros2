@@ -1,0 +1,17 @@
+<package format="3">
+  <name>drone_state</name>
+  <version>1.0.0</version>
+  <description>드론 상태 커스텀 토픽 발행 노드</description>
+  <maintainer email="user@example.com">user</maintainer>
+  <license>MIT</license>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>mavros_msgs</depend>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
+
