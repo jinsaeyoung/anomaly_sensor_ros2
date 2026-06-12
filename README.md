@@ -122,3 +122,4 @@ ros2 bag record -a -o anomaly_data_$(date +%Y%m%d_%H%M%S)
 | mavros 중복 실행 | 이전 프로세스 잔존 | `pkill -f mavros_node` 후 재실행 |
 | rqt에서 mavros 토픽 안 보임 | QoS 불일치 (BEST_EFFORT) | `ros2 topic echo <topic> --qos-reliability best_effort` 사용 |
 | USB 포트 번호 변경 | 재연결 시 ttyUSB/ttyACM 번호 변동 | `/dev/serial/by-id/` 고유 ID 사용 (이미 적용됨) |
+| `ros2 launch` 실행 시 `KeyError: 'launch'` | `drone_sensors/launch/` 폴더에 `__init__.py`가 있어서 ROS2의 `launch` 모듈과 이름 충돌 | `rm src/drone_sensors/launch/__init__.py` 후 `build/install/log` 삭제하고 재빌드 |
