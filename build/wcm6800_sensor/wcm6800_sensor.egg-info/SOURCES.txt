@@ -1,0 +1,11 @@
+setup.cfg
+setup.py
+wcm6800_sensor/__init__.py
+wcm6800_sensor/wcm6800_uart_node.py
+wcm6800_sensor.egg-info/PKG-INFO
+wcm6800_sensor.egg-info/SOURCES.txt
+wcm6800_sensor.egg-info/dependency_links.txt
+wcm6800_sensor.egg-info/entry_points.txt
+wcm6800_sensor.egg-info/requires.txt
+wcm6800_sensor.egg-info/top_level.txt
+wcm6800_sensor.egg-info/zip-safe

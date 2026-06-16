@@ -1,0 +1,19 @@
+/home/xd/.local/lib/python3.10/site-packages/setuptools/dist.py:717: UserWarning: Usage of dash-separated 'script-dir' will not be supported in future versions. Please use the underscore name 'script_dir' instead
+  warnings.warn(
+running develop
+running egg_info
+creating respeaker.egg-info
+writing respeaker.egg-info/PKG-INFO
+writing dependency_links to respeaker.egg-info/dependency_links.txt
+writing entry points to respeaker.egg-info/entry_points.txt
+writing requirements to respeaker.egg-info/requires.txt
+writing top-level names to respeaker.egg-info/top_level.txt
+writing manifest file 'respeaker.egg-info/SOURCES.txt'
+reading manifest file 'respeaker.egg-info/SOURCES.txt'
+writing manifest file 'respeaker.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/xd/anomaly_sensor_ros2/install/respeaker/lib/python3.10/site-packages/respeaker.egg-link (link to .)
+Installing respeaker_full_node script to /home/xd/anomaly_sensor_ros2/install/respeaker/lib/respeaker
+Installing respeaker_node script to /home/xd/anomaly_sensor_ros2/install/respeaker/lib/respeaker
+
+Installed /home/xd/anomaly_sensor_ros2/build/respeaker

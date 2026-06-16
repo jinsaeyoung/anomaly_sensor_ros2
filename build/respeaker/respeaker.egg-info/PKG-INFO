@@ -1,0 +1,19 @@
+Metadata-Version: 2.1
+Name: respeaker
+Version: 1.0.0
+Summary: ROS interface for respeaker.
+Home-page: UNKNOWN
+Author: Alexander Roessler
+Author-email: alex@machinekoder.com
+Maintainer: Alexander Roessler
+Maintainer-email: alex@machinekoder.com
+License: Apache License, Version 2.0
+Keywords: ROS
+Platform: UNKNOWN
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python
+Classifier: Topic :: Software Development
+
+UNKNOWN
+

@@ -1,0 +1,16 @@
+running develop
+running egg_info
+creating thl100_sensor.egg-info
+writing thl100_sensor.egg-info/PKG-INFO
+writing dependency_links to thl100_sensor.egg-info/dependency_links.txt
+writing entry points to thl100_sensor.egg-info/entry_points.txt
+writing requirements to thl100_sensor.egg-info/requires.txt
+writing top-level names to thl100_sensor.egg-info/top_level.txt
+writing manifest file 'thl100_sensor.egg-info/SOURCES.txt'
+reading manifest file 'thl100_sensor.egg-info/SOURCES.txt'
+writing manifest file 'thl100_sensor.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/xd/anomaly_sensor_ros2/install/thl100_sensor/lib/python3.10/site-packages/thl100-sensor.egg-link (link to .)
+Installing thl100_node script to /home/xd/anomaly_sensor_ros2/install/thl100_sensor/lib/thl100_sensor
+
+Installed /home/xd/anomaly_sensor_ros2/build/thl100_sensor

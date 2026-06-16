@@ -1,0 +1,25 @@
+[0.634s] Invoking command in '/home/xd/anomaly_sensor_ros2/build/drone_sensors': AMENT_PREFIX_PATH=/home/xd/anomaly_sensor_ros2/install/wcm6800_sensor:/home/xd/anomaly_sensor_ros2/install/thl100_sensor:/home/xd/anomaly_sensor_ros2/install/respeaker:${AMENT_PREFIX_PATH} PYTHONPATH=/home/xd/anomaly_sensor_ros2/build/drone_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/xd/anomaly_sensor_ros2/install/drone_sensors/lib/python3.10/site-packages:/home/xd/anomaly_sensor_ros2/build/wcm6800_sensor:/home/xd/anomaly_sensor_ros2/install/wcm6800_sensor/lib/python3.10/site-packages:/home/xd/anomaly_sensor_ros2/build/thl100_sensor:/home/xd/anomaly_sensor_ros2/install/thl100_sensor/lib/python3.10/site-packages:/home/xd/anomaly_sensor_ros2/build/respeaker:/home/xd/anomaly_sensor_ros2/install/respeaker/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/xd/anomaly_sensor_ros2/build/drone_sensors/build --no-deps symlink_data
+[0.876s] running develop
+[1.046s] running egg_info
+[1.046s] creating drone_sensors.egg-info
+[1.046s] writing drone_sensors.egg-info/PKG-INFO
+[1.046s] writing dependency_links to drone_sensors.egg-info/dependency_links.txt
+[1.047s] writing entry points to drone_sensors.egg-info/entry_points.txt
+[1.047s] writing requirements to drone_sensors.egg-info/requires.txt
+[1.047s] writing top-level names to drone_sensors.egg-info/top_level.txt
+[1.047s] writing manifest file 'drone_sensors.egg-info/SOURCES.txt'
+[1.048s] reading manifest file 'drone_sensors.egg-info/SOURCES.txt'
+[1.049s] writing manifest file 'drone_sensors.egg-info/SOURCES.txt'
+[1.050s] running build_ext
+[1.050s] Creating /home/xd/anomaly_sensor_ros2/install/drone_sensors/lib/python3.10/site-packages/drone-sensors.egg-link (link to .)
+[1.050s] 
+[1.050s] Installed /home/xd/anomaly_sensor_ros2/build/drone_sensors
+[1.050s] running symlink_data
+[1.050s] creating /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/ament_index
+[1.051s] creating /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/ament_index/resource_index
+[1.051s] creating /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/ament_index/resource_index/packages
+[1.051s] symbolically linking /home/xd/anomaly_sensor_ros2/build/drone_sensors/resource/drone_sensors -> /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/ament_index/resource_index/packages
+[1.051s] symbolically linking /home/xd/anomaly_sensor_ros2/build/drone_sensors/package.xml -> /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/drone_sensors
+[1.051s] creating /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/drone_sensors/launch
+[1.051s] symbolically linking /home/xd/anomaly_sensor_ros2/build/drone_sensors/launch/drone_sensor_launch.py -> /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/drone_sensors/launch
+[1.076s] Invoked command in '/home/xd/anomaly_sensor_ros2/build/drone_sensors' returned '0': AMENT_PREFIX_PATH=/home/xd/anomaly_sensor_ros2/install/wcm6800_sensor:/home/xd/anomaly_sensor_ros2/install/thl100_sensor:/home/xd/anomaly_sensor_ros2/install/respeaker:${AMENT_PREFIX_PATH} PYTHONPATH=/home/xd/anomaly_sensor_ros2/build/drone_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/xd/anomaly_sensor_ros2/install/drone_sensors/lib/python3.10/site-packages:/home/xd/anomaly_sensor_ros2/build/wcm6800_sensor:/home/xd/anomaly_sensor_ros2/install/wcm6800_sensor/lib/python3.10/site-packages:/home/xd/anomaly_sensor_ros2/build/thl100_sensor:/home/xd/anomaly_sensor_ros2/install/thl100_sensor/lib/python3.10/site-packages:/home/xd/anomaly_sensor_ros2/build/respeaker:/home/xd/anomaly_sensor_ros2/install/respeaker/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/xd/anomaly_sensor_ros2/build/drone_sensors/build --no-deps symlink_data

@@ -1,0 +1,15 @@
+setup.cfg
+setup.py
+respeaker/__init__.py
+respeaker/respeaker_full_node.py
+respeaker/respeaker_node.py
+respeaker.egg-info/PKG-INFO
+respeaker.egg-info/SOURCES.txt
+respeaker.egg-info/dependency_links.txt
+respeaker.egg-info/entry_points.txt
+respeaker.egg-info/requires.txt
+respeaker.egg-info/top_level.txt
+respeaker/firmware/__init__.py
+respeaker/firmware/dfu.py
+respeaker/firmware/dfu_windows.py
+respeaker/firmware/tuning.py

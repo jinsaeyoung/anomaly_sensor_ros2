@@ -1,0 +1,23 @@
+running develop
+running egg_info
+creating drone_sensors.egg-info
+writing drone_sensors.egg-info/PKG-INFO
+writing dependency_links to drone_sensors.egg-info/dependency_links.txt
+writing entry points to drone_sensors.egg-info/entry_points.txt
+writing requirements to drone_sensors.egg-info/requires.txt
+writing top-level names to drone_sensors.egg-info/top_level.txt
+writing manifest file 'drone_sensors.egg-info/SOURCES.txt'
+reading manifest file 'drone_sensors.egg-info/SOURCES.txt'
+writing manifest file 'drone_sensors.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/xd/anomaly_sensor_ros2/install/drone_sensors/lib/python3.10/site-packages/drone-sensors.egg-link (link to .)
+
+Installed /home/xd/anomaly_sensor_ros2/build/drone_sensors
+running symlink_data
+creating /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/ament_index
+creating /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/ament_index/resource_index
+creating /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/ament_index/resource_index/packages
+symbolically linking /home/xd/anomaly_sensor_ros2/build/drone_sensors/resource/drone_sensors -> /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/ament_index/resource_index/packages
+symbolically linking /home/xd/anomaly_sensor_ros2/build/drone_sensors/package.xml -> /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/drone_sensors
+creating /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/drone_sensors/launch
+symbolically linking /home/xd/anomaly_sensor_ros2/build/drone_sensors/launch/drone_sensor_launch.py -> /home/xd/anomaly_sensor_ros2/install/drone_sensors/share/drone_sensors/launch

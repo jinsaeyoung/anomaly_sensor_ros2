@@ -1,0 +1,9 @@
+source;share/wcm6800_sensor/hook/pythonpath.ps1
+source;share/wcm6800_sensor/hook/pythonpath.dsv
+source;share/wcm6800_sensor/hook/pythonpath.sh
+source;share/wcm6800_sensor/hook/ament_prefix_path.ps1
+source;share/wcm6800_sensor/hook/ament_prefix_path.dsv
+source;share/wcm6800_sensor/hook/ament_prefix_path.sh
+source;../../build/wcm6800_sensor/share/wcm6800_sensor/hook/pythonpath_develop.ps1
+source;../../build/wcm6800_sensor/share/wcm6800_sensor/hook/pythonpath_develop.dsv
+source;../../build/wcm6800_sensor/share/wcm6800_sensor/hook/pythonpath_develop.sh

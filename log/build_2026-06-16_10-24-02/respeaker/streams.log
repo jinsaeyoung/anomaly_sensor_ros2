@@ -1,0 +1,21 @@
+[1.458s] Invoking command in '/home/xd/anomaly_sensor_ros2/build/respeaker': PYTHONPATH=/home/xd/anomaly_sensor_ros2/build/respeaker/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/xd/anomaly_sensor_ros2/install/respeaker/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/xd/anomaly_sensor_ros2/build/respeaker/build --no-deps
+[1.662s] /home/xd/.local/lib/python3.10/site-packages/setuptools/dist.py:717: UserWarning: Usage of dash-separated 'script-dir' will not be supported in future versions. Please use the underscore name 'script_dir' instead
+[1.662s]   warnings.warn(
+[1.698s] running develop
+[1.870s] running egg_info
+[1.870s] creating respeaker.egg-info
+[1.870s] writing respeaker.egg-info/PKG-INFO
+[1.870s] writing dependency_links to respeaker.egg-info/dependency_links.txt
+[1.870s] writing entry points to respeaker.egg-info/entry_points.txt
+[1.870s] writing requirements to respeaker.egg-info/requires.txt
+[1.870s] writing top-level names to respeaker.egg-info/top_level.txt
+[1.870s] writing manifest file 'respeaker.egg-info/SOURCES.txt'
+[1.872s] reading manifest file 'respeaker.egg-info/SOURCES.txt'
+[1.872s] writing manifest file 'respeaker.egg-info/SOURCES.txt'
+[1.873s] running build_ext
+[1.873s] Creating /home/xd/anomaly_sensor_ros2/install/respeaker/lib/python3.10/site-packages/respeaker.egg-link (link to .)
+[1.874s] Installing respeaker_full_node script to /home/xd/anomaly_sensor_ros2/install/respeaker/lib/respeaker
+[1.874s] Installing respeaker_node script to /home/xd/anomaly_sensor_ros2/install/respeaker/lib/respeaker
+[1.874s] 
+[1.874s] Installed /home/xd/anomaly_sensor_ros2/build/respeaker
+[1.917s] Invoked command in '/home/xd/anomaly_sensor_ros2/build/respeaker' returned '0': PYTHONPATH=/home/xd/anomaly_sensor_ros2/build/respeaker/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/xd/anomaly_sensor_ros2/install/respeaker/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/xd/anomaly_sensor_ros2/build/respeaker/build --no-deps

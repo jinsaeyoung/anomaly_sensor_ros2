@@ -1,0 +1,16 @@
+running develop
+running egg_info
+creating drone_state.egg-info
+writing drone_state.egg-info/PKG-INFO
+writing dependency_links to drone_state.egg-info/dependency_links.txt
+writing entry points to drone_state.egg-info/entry_points.txt
+writing requirements to drone_state.egg-info/requires.txt
+writing top-level names to drone_state.egg-info/top_level.txt
+writing manifest file 'drone_state.egg-info/SOURCES.txt'
+reading manifest file 'drone_state.egg-info/SOURCES.txt'
+writing manifest file 'drone_state.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/xd/anomaly_sensor_ros2/install/drone_state/lib/python3.10/site-packages/drone-state.egg-link (link to .)
+Installing drone_state_node script to /home/xd/anomaly_sensor_ros2/install/drone_state/lib/drone_state
+
+Installed /home/xd/anomaly_sensor_ros2/build/drone_state

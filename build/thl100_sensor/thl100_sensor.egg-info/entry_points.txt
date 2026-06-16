@@ -1,0 +1,3 @@
+[console_scripts]
+thl100_node = thl100_sensor.thl100_uart_node:main
+

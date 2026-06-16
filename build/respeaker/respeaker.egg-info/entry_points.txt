@@ -1,0 +1,4 @@
+[console_scripts]
+respeaker_full_node = respeaker.respeaker_full_node:main
+respeaker_node = respeaker.respeaker_node:main
+
