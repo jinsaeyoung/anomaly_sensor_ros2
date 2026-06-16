@@ -84,6 +84,9 @@ cd $WS
 colcon build --symlink-install
 echo "✅ 빌드 완료"
 
+# 스크립트 실행 권한 부여
+chmod +x $WS/scripts/*.sh 2>/dev/null || true
+
 # ── bashrc 설정 ───────────────────────────────────────────────────────────
 echo "bashrc 설정 중..."
 
@@ -98,18 +101,25 @@ if ! grep -q "source $WS/install/setup.bash" ~/.bashrc; then
     echo "source $WS/install/setup.bash" >> ~/.bashrc
 fi
 
-if ! grep -q "alias start_drone" ~/.bashrc; then
-    cat >> ~/.bashrc << ALIAS
+# 기존 alias 줄들 제거 후 재등록 (스크립트 재실행 시 중복/구버전 방지)
+sed -i '/^alias start_drone=/d' ~/.bashrc
+sed -i '/^alias stop_drone=/d' ~/.bashrc
+sed -i '/^alias check_topics=/d' ~/.bashrc
+sed -i '/^alias check_usb=/d' ~/.bashrc
+sed -i '/^alias record_drone=/d' ~/.bashrc
+sed -i '/^alias analyze_drone=/d' ~/.bashrc
+sed -i '/^# 드론 센서 편의 명령어$/d' ~/.bashrc
+
+cat >> ~/.bashrc << ALIAS
 
 # 드론 센서 편의 명령어
-alias start_drone='pkill -f mavros_node 2>/dev/null; sleep 1; ros2 launch drone_sensors drone_sensor_launch.py'
+alias start_drone='$WS/scripts/check_time_sync.sh; pkill -f mavros_node 2>/dev/null; sleep 1; ros2 launch drone_sensors drone_sensor_launch.py'
 alias stop_drone='pkill -f mavros_node 2>/dev/null; pkill -f drone_sensor_launch 2>/dev/null'
 alias check_topics='ros2 topic list | grep -E "drone|mavros|respeaker|thl100|wcm6800"'
 alias check_usb='ls -la /dev/serial/by-id/'
 alias record_drone='$WS/scripts/record_data.sh'
 alias analyze_drone='python3 $WS/scripts/analyze_bag.py'
 ALIAS
-fi
 
 source ~/.bashrc 2>/dev/null || true
 echo "✅ bashrc 설정 완료"
@@ -122,12 +132,12 @@ echo ""
 echo "사용 방법:"
 echo "  ⚠️  로그아웃 후 재로그인 필요 (dialout 그룹 적용)"
 echo ""
-echo "  start_drone              — 전체 센서 실행"
-echo "  stop_drone               — 전체 센서 종료"
-echo "  check_topics             — 토픽 목록 확인"
-echo "  check_usb                — USB 장치 확인"
-echo "  record_drone 30          — 30초 데이터 녹화"
-echo "  analyze_drone <bag경로>  — 데이터 분석 (CSV + 그래프)"
+echo "  start_drone              — 시간 동기화 확인 후 전체 센서 실행"
+echo "  stop_drone                — 전체 센서 종료"
+echo "  check_topics              — 토픽 목록 확인"
+echo "  check_usb                 — USB 장치 확인"
+echo "  record_drone 30           — 30초 데이터 녹화"
+echo "  analyze_drone <bag경로>   — 데이터 분석 (CSV + 그래프)"
 echo ""
 echo "예시:"
 echo "  record_drone 60"

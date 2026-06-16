@@ -75,14 +75,23 @@ def read_bag(bag_path):
 
     conn.close()
 
+    # 전체 bag 기준 시작 시각 (모든 토픽 통틀어 가장 빠른 timestamp)
+    all_timestamps = [row['timestamp'] for rows in data.values() for row in rows]
+    if not all_timestamps:
+        return {}, 0
+    bag_start = min(all_timestamps)
+
     dfs = {}
     for topic, rows in data.items():
         df = pd.DataFrame(rows)
         if 'timestamp' in df.columns:
-            df['time_sec'] = (df['timestamp'] - df['timestamp'].iloc[0]) / 1e9
+            # 토픽별이 아닌 bag 전체 시작 시각 기준 — 모든 토픽이 같은 0초를 공유
+            df['time_sec'] = (df['timestamp'] - bag_start) / 1e9
+            # 실제 시각(사람이 읽을 수 있는 형태)도 함께 제공
+            df['datetime'] = pd.to_datetime(df['timestamp'], unit='ns')
         dfs[topic] = df
 
-    return dfs
+    return dfs, bag_start
 
 
 def save_csv(dfs, output_prefix):
@@ -99,11 +108,10 @@ def save_csv(dfs, output_prefix):
     return out_dir
 
 
-def merge_by_time(dfs, output_prefix, tolerance_sec=0.5):
+def merge_by_time(dfs, output_prefix, bag_start_ns, tolerance_sec=0.5):
     """타임스탬프 기준으로 전체 토픽 병합 (asof merge)"""
     print('\n타임스탬프 기준 병합 중...')
 
-    # value 컬럼만 있는 단순 토픽들 병합
     merged = None
     for topic, df in dfs.items():
         if 'value' not in df.columns:
@@ -126,6 +134,13 @@ def merge_by_time(dfs, output_prefix, tolerance_sec=0.5):
             )
 
     if merged is not None:
+        # 보기 편한 시간 컬럼 추가
+        merged = merged.sort_values('time_sec').reset_index(drop=True)
+        merged.insert(0, 'time_ms', (merged['time_sec'] * 1000).round(1))       # 밀리초
+        merged.insert(0, 'datetime', pd.to_datetime(
+            bag_start_ns + (merged['time_sec'] * 1e9).astype('int64'), unit='ns'
+        ))  # 실제 날짜시각
+
         out_path = f'{output_prefix}_merged.csv'
         merged.to_csv(out_path, index=False)
         print(f'  병합 CSV 저장: {out_path} ({len(merged)} rows, {len(merged.columns)} cols)')
@@ -200,19 +215,30 @@ def main():
         print(__doc__)
         sys.exit(1)
 
-    bag_path = sys.argv[1]
-    output_prefix = sys.argv[2] if len(sys.argv) > 2 else os.path.basename(bag_path.rstrip('/'))
+    bag_path = sys.argv[1].rstrip('/')
+    bag_dir = os.path.dirname(os.path.abspath(bag_path))
+    bag_name = os.path.basename(bag_path)
+
+    # output_prefix가 명시되지 않으면
+    # <bag폴더의 부모>/analyzed/<bag이름>/<bag이름> 경로에 저장
+    if len(sys.argv) > 2:
+        output_prefix = sys.argv[2]
+    else:
+        analyzed_dir = os.path.join(bag_dir, 'analyzed', bag_name)
+        os.makedirs(analyzed_dir, exist_ok=True)
+        output_prefix = os.path.join(analyzed_dir, bag_name)
 
     print(f'bag 파일 읽는 중: {bag_path}')
-    dfs = read_bag(bag_path)
+    dfs, bag_start = read_bag(bag_path)
     print(f'토픽 {len(dfs)}개 로드 완료')
+    print(f'결과 저장 위치: {os.path.dirname(output_prefix)}/')
 
     print_summary(dfs)
 
     print('\nCSV 저장 중...')
     save_csv(dfs, output_prefix)
 
-    merge_by_time(dfs, output_prefix)
+    merge_by_time(dfs, output_prefix, bag_start)
 
     plot_key_topics(dfs, output_prefix)
 

@@ -144,6 +144,22 @@ record_drone         # 무제한 (Ctrl+C로 종료)
 
 기본 녹화 토픽은 `scripts/record_data.sh`의 `TOPICS` 배열에서 추가/제거할 수 있습니다. `/respeaker/audio`는 용량이 커서 기본 제외되어 있습니다.
 
+## 시간 동기화 (datetime 정확도)
+
+`analyze_drone`이 생성하는 `datetime` 컬럼은 라즈베리파이/PC의 **시스템 시계**를 기준으로 기록됩니다. 네트워크 연결 여부와 무관하게 데이터의 *상대적* 시간 간격은 항상 정확하지만, *절대* 시각이 실제와 일치하려면 시스템 시계가 NTP로 동기화되어 있어야 합니다.
+
+`start_drone`은 실행 전 `scripts/check_time_sync.sh`를 자동으로 호출하여:
+- 인터넷이 연결되어 있고 NTP 미동기화 상태면 → 자동으로 동기화 시도
+- 인터넷이 없으면 → 경고만 출력하고 계속 진행 (오프라인 비행도 막지 않음)
+
+수동으로 확인/동기화하려면:
+```bash
+timedatectl status
+sudo timedatectl set-ntp true
+```
+
+야외에서 WiFi 없이 비행할 예정이라면, **비행 전 한 번이라도 인터넷에 연결**해서 시간을 맞춰두는 것을 권장합니다.
+
 ## 데이터 분석
 
 ```bash
@@ -203,3 +219,6 @@ anomaly_data_20260616_112216_overview.png  # 핵심 지표 그래프
 | FC 연결 끊김 (`mavconn: serial0: write: No such device`) | USB 케이블 분리 또는 FC 재부팅 | USB 재연결 후 `stop_drone` → `start_drone` |
 | `record_drone`/`analyze_drone` alias가 안 먹음 | 이전 `.bashrc` 설정이 새 환경에 반영 안 됨 | 새 터미널 열거나 `source ~/.bashrc` 실행 |
 | 새 PC/SD카드로 이전 후 `ros2_ws/install/setup.bash: No such file or directory` | 예전 워크스페이스(`~/ros2_ws`) source 줄이 `.bashrc`에 남아있음 | install.sh가 해당 줄을 자동 정리함(이미 적용됨) |
+| Excel에서 본 `time_sec`이 토픽마다 다른 시점을 0초로 잡은 것처럼 보임 | `analyze_bag.py`가 과거에는 토픽별로 첫 메시지 기준 0초를 따로 계산했음 | 전체 bag의 가장 빠른 timestamp를 공통 기준으로 사용하도록 수정(이미 적용됨). `_merged.csv`의 `datetime`, `time_ms`, `time_sec` 컬럼 모두 동일 기준 |
+| `analyze_drone` 결과 파일이 `~/anomaly_data/`가 아닌 홈 디렉토리에 생김 | 실행한 현재 디렉토리(cwd)에 출력하던 구버전 로직 | bag 파일 경로 기준 `<bag폴더>/analyzed/<bag이름>/`에 저장하도록 수정(이미 적용됨) |
+| `datetime` 값이 실제 시각과 다름 (예: 1970년 또는 부팅 전 날짜) | 라즈베리파이에 RTC 배터리가 없어 NTP 동기화 전까지 시스템 시계가 부정확함 | `start_drone` 실행 시 자동으로 시간 동기화 확인/시도함(이미 적용됨). 오프라인 환경이면 비행 전 한 번 인터넷 연결해 시간을 맞춰둘 것 |
