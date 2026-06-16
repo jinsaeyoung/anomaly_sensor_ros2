@@ -24,6 +24,8 @@ from rosidl_runtime_py.utilities import get_message
 from rclpy.serialization import deserialize_message
 import yaml
 
+LOCAL_TZ = 'Asia/Seoul'  # 데이터 수집 시스템의 로컬 타임존 — 환경에 맞게 변경
+
 
 def read_bag(bag_path):
     """rosbag2 (.db3) 파일을 읽어 토픽별 DataFrame 딕셔너리 반환"""
@@ -87,8 +89,10 @@ def read_bag(bag_path):
         if 'timestamp' in df.columns:
             # 토픽별이 아닌 bag 전체 시작 시각 기준 — 모든 토픽이 같은 0초를 공유
             df['time_sec'] = (df['timestamp'] - bag_start) / 1e9
-            # 실제 시각(사람이 읽을 수 있는 형태)도 함께 제공
-            df['datetime'] = pd.to_datetime(df['timestamp'], unit='ns')
+            # 실제 시각(사람이 읽을 수 있는 형태) — 시스템 로컬 타임존 기준
+            # (rosbag 내부 timestamp는 UTC epoch이므로 tz_localize 후 변환 필요)
+            dt_utc = pd.to_datetime(df['timestamp'], unit='ns', utc=True)
+            df['datetime'] = dt_utc.dt.tz_convert(LOCAL_TZ).dt.tz_localize(None)
         dfs[topic] = df
 
     return dfs, bag_start
@@ -137,9 +141,11 @@ def merge_by_time(dfs, output_prefix, bag_start_ns, tolerance_sec=0.5):
         # 보기 편한 시간 컬럼 추가
         merged = merged.sort_values('time_sec').reset_index(drop=True)
         merged.insert(0, 'time_ms', (merged['time_sec'] * 1000).round(1))       # 밀리초
-        merged.insert(0, 'datetime', pd.to_datetime(
-            bag_start_ns + (merged['time_sec'] * 1e9).astype('int64'), unit='ns'
-        ))  # 실제 날짜시각
+        # bag_start(UTC epoch ns) + 경과시간 → 로컬 타임존으로 변환
+        dt_utc = pd.to_datetime(
+            bag_start_ns + (merged['time_sec'] * 1e9).astype('int64'), unit='ns', utc=True
+        )
+        merged.insert(0, 'datetime', dt_utc.dt.tz_convert(LOCAL_TZ).dt.tz_localize(None))
 
         out_path = f'{output_prefix}_merged.csv'
         merged.to_csv(out_path, index=False)
