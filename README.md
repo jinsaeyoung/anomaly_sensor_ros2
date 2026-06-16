@@ -175,6 +175,12 @@ anomaly_data_20260616_112216_overview.png  # 핵심 지표 그래프
 
 터미널에는 토픽별 발행 Hz, min/max/mean 통계도 함께 출력됩니다.
 
+`_merged.csv`의 `datetime` 컬럼은 기본적으로 **한국 시간(Asia/Seoul)** 기준으로 표시됩니다. 다른 시간대에서 사용한다면 `scripts/analyze_bag.py` 상단의 `LOCAL_TZ` 값을 변경하세요.
+
+```python
+LOCAL_TZ = 'Asia/Seoul'  # 환경에 맞게 변경
+```
+
 ## 발행 토픽 전체 목록
 
 ### /drone/* (mavros 기반 커스텀 토픽)
@@ -222,3 +228,4 @@ anomaly_data_20260616_112216_overview.png  # 핵심 지표 그래프
 | Excel에서 본 `time_sec`이 토픽마다 다른 시점을 0초로 잡은 것처럼 보임 | `analyze_bag.py`가 과거에는 토픽별로 첫 메시지 기준 0초를 따로 계산했음 | 전체 bag의 가장 빠른 timestamp를 공통 기준으로 사용하도록 수정(이미 적용됨). `_merged.csv`의 `datetime`, `time_ms`, `time_sec` 컬럼 모두 동일 기준 |
 | `analyze_drone` 결과 파일이 `~/anomaly_data/`가 아닌 홈 디렉토리에 생김 | 실행한 현재 디렉토리(cwd)에 출력하던 구버전 로직 | bag 파일 경로 기준 `<bag폴더>/analyzed/<bag이름>/`에 저장하도록 수정(이미 적용됨) |
 | `datetime` 값이 실제 시각과 다름 (예: 1970년 또는 부팅 전 날짜) | 라즈베리파이에 RTC 배터리가 없어 NTP 동기화 전까지 시스템 시계가 부정확함 | `start_drone` 실행 시 자동으로 시간 동기화 확인/시도함(이미 적용됨). 오프라인 환경이면 비행 전 한 번 인터넷 연결해 시간을 맞춰둘 것 |
+| `_merged.csv`의 `datetime`이 파일명(bag 폴더명)의 시각보다 9시간 빠르게 보임 | rosbag 내부 timestamp는 UTC epoch 기준인데, 과거 버전의 `analyze_bag.py`가 변환 시 UTC를 그대로 표시함(한국은 UTC+9) | `pd.to_datetime(..., utc=True)` 후 `LOCAL_TZ`(기본값 `Asia/Seoul`)로 변환하도록 수정(이미 적용됨). 다른 시간대에서 사용 시 `analyze_bag.py` 상단의 `LOCAL_TZ` 값을 변경 |
