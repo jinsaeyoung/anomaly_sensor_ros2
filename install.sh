@@ -83,7 +83,7 @@ alias start_drone='pkill -f mavros_node 2>/dev/null; sleep 1; ros2 launch drone_
 alias stop_drone='pkill -f mavros_node 2>/dev/null; pkill -f drone_sensor_launch 2>/dev/null'
 alias check_topics='ros2 topic list | grep -E "drone|mavros|respeaker|thl100|wcm6800"'
 alias check_usb='ls -la /dev/serial/by-id/'
-alias record_drone='~/anomaly_sensor_ros2/record_data.sh'
+alias record_drone='~/anomaly_sensor_ros2/scripts/record_data.sh'
 ALIAS
 fi
 
