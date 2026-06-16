@@ -87,6 +87,9 @@ echo "✅ 빌드 완료"
 # ── bashrc 설정 ───────────────────────────────────────────────────────────
 echo "bashrc 설정 중..."
 
+# 예전 워크스페이스(ros2_ws) 잔재 제거 — 다른 경로 source로 인한 충돌 방지
+sed -i '/ros2_ws\/install\/setup.bash/d' ~/.bashrc 2>/dev/null || true
+
 if ! grep -q "source /opt/ros/$ROS_DISTRO/setup.bash" ~/.bashrc; then
     echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> ~/.bashrc
 fi
