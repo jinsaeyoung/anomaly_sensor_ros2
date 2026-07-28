@@ -3,11 +3,13 @@
 """
 드론 센서 통합 Launch 파일
 실행 노드:
-  - mavros              (FC 연동)
-  - respeaker_full_node (마이크 DoA/VAD/Audio/Energy)
-  - thl100_node         (온습도/조도)
-  - wcm6800_node        (전류계)
-  - drone_state_node    (mavros 커스텀 토픽 재발행)
+  - mavros              (FC 연동 — 원본 토픽 직접 사용)
+  - respeaker_full_node (마이크)
+  - thl100_node         (온습도/조도, 1Hz)
+  - wcm6800_node        (전류계, 10Hz)
+
+제외:
+  - drone_state_node    (mavros 원본 토픽을 직접 녹화하므로 불필요)
 """
 
 import os
@@ -51,8 +53,18 @@ def generate_launch_description():
         default_value='50.0',
         description='ReSpeaker DoA/VAD 폴링 Hz'
     )
+    thl100_rate_arg = DeclareLaunchArgument(
+        'thl100_rate',
+        default_value='1.0',
+        description='THL100 발행 주기 Hz (환경값은 급격히 변하지 않음)'
+    )
+    wcm6800_rate_arg = DeclareLaunchArgument(
+        'wcm6800_rate',
+        default_value='10.0',
+        description='WCM6800 발행 주기 Hz (전류 변화 관찰)'
+    )
 
-    # ── mavros (IncludeLaunchDescription 방식 — 크래시 방지) ─────────────
+    # ── mavros (원본 토픽 직접 사용) ─────────────────────────────────────
     mavros_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(
@@ -65,7 +77,7 @@ def generate_launch_description():
             'fcu_url':      FCU_URL,
             'fcu_protocol': 'v2.0',
             'gcs_url':      '',
-    'log_output':   'log',    # ← screen 대신 log 파일로
+            'log_output':   'log',
         }.items()
     )
 
@@ -81,52 +93,58 @@ def generate_launch_description():
         }]
     )
 
-    # ── THL100 온습도/조도 노드 ───────────────────────────────────────────
+    # ── THL100 온습도/조도 노드 (1Hz 발행) ───────────────────────────────
     thl100_node = Node(
         package='thl100_sensor',
         executable='thl100_node',
         name='thl100_node',
         output='screen',
         parameters=[{
-            'port':     LaunchConfiguration('thl100_port'),
-            'baudrate': 9600,
+            'port':              LaunchConfiguration('thl100_port'),
+            'baudrate':          9600,
+            'publish_rate_hz':   LaunchConfiguration('thl100_rate'),
+            'stale_timeout_sec': 3.0,
         }]
     )
 
-    # ── WCM6800 전류계 노드 ───────────────────────────────────────────────
+    # ── WCM6800 전류계 노드 (10Hz 발행) ──────────────────────────────────
     wcm6800_node = Node(
         package='wcm6800_sensor',
         executable='wcm6800_node',
         name='wcm6800_node',
         output='screen',
         parameters=[{
-            'port':     LaunchConfiguration('wcm6800_port'),
-            'baudrate': 9600,
+            'port':              LaunchConfiguration('wcm6800_port'),
+            'baudrate':          9600,
+            'publish_rate_hz':   LaunchConfiguration('wcm6800_rate'),
+            'stale_timeout_sec': 1.0,
         }]
     )
 
-    # ── drone_state 커스텀 토픽 재발행 노드 ──────────────────────────────
-    drone_state_node = Node(
-        package='drone_state',
-        executable='drone_state_node',
-        name='drone_state_node',
-        output='screen',
-    )
+    # ── drone_state_node 제외 ─────────────────────────────────────────────
+    # mavros 원본 토픽을 직접 녹화하므로 Float32 재발행 노드 불필요
+    # 실시간 모니터링이 필요한 경우 아래 주석 해제
+    # from launch_ros.actions import Node as LNode
+    # drone_state_node = LNode(
+    #     package='drone_state',
+    #     executable='drone_state_node',
+    #     name='drone_state_node',
+    #     output='screen',
+    # )
 
     return LaunchDescription([
         # 파라미터 선언
         thl100_port_arg,
         wcm6800_port_arg,
         respeaker_update_rate_arg,
+        thl100_rate_arg,
+        wcm6800_rate_arg,
 
-        # FC 연동 (mavros)
+        # 노드 실행
         mavros_launch,
-
-        # 센서 노드
         respeaker_node,
         thl100_node,
         wcm6800_node,
 
-        # 커스텀 토픽 재발행
-        drone_state_node,
+        # drone_state_node 제외 (필요 시 위 주석 해제)
     ])
