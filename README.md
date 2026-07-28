@@ -2,17 +2,44 @@
 
 드론 이상탐지(Anomaly Detection)를 위한 다중 센서 데이터 수집 ROS2 워크스페이스.
 
-ReSpeaker 마이크, 온습도/조도 센서, 전류계, 비행 컨트롤러(FC) 데이터를 ROS2 토픽으로 통합 발행하고, rosbag 녹화 및 CSV/그래프 분석까지 한 번에 처리합니다.
+mavros 원본 토픽을 직접 녹화하고, UART 센서(온습도/전류)는 지정 주기로 발행하는 구조로 구성되어 있습니다. 수집된 데이터는 rosbag으로 저장되며, 분석 스크립트가 10Hz 기준 정렬 CSV와 그래프를 자동으로 생성합니다.
 
-## 구성
+---
 
-| 패키지 | 설명 | 발행 토픽 |
-|---|---|---|
-| `respeaker` | ReSpeaker Mic Array v3.0 (DoA/VAD/Audio/Energy) | `/respeaker/*` |
-| `thl100_sensor` | OSTSen-THL100 온습도/조도 센서 (UART) | `/thl100/*` |
-| `wcm6800_sensor` | Winson WCM6800 전류계 (UART) | `/wcm6800/*` |
-| `drone_state` | mavros 데이터를 재가공한 커스텀 토픽 (FC 상태) | `/drone/*` |
-| `drone_sensors` | mavros + 전체 센서 통합 launch 패키지 | - |
+## 시스템 구조
+
+```
+FC (ArduPilot)
+    ↓ MAVLink (USB/UART)
+mavros_node  →  /mavros/*  ─────────────────────────────┐
+                                                         │
+ReSpeaker Mic Array v3.0  →  /respeaker/*               │
+                                                         ├→ rosbag 녹화
+THL100 (UART 연속 수신)   →  /thl100/data, /thl100/raw  │
+                                                         │
+WCM6800 (UART 연속 수신)  →  /wcm6800/data, /wcm6800/raw┘
+                                                         ↓
+                                              analyze_drone
+                                                         ↓
+                                         10Hz 정렬 merged CSV + 그래프
+```
+
+**핵심 설계 원칙:**
+- mavros 원본 토픽을 변환·재발행하지 않고 그대로 녹화
+- UART 센서는 수신 스레드와 발행 타이머를 분리하여 안정적인 주기 발행
+- 좌표계 변환, 단위 변환 등은 수집 단계가 아닌 **분석 단계**에서 수행
+
+---
+
+## 패키지 구성
+
+| 패키지 | 설명 |
+|---|---|
+| `respeaker` | ReSpeaker Mic Array v3.0 DoA/VAD/Audio/Energy |
+| `thl100_sensor` | OSTSen-THL100 온습도/조도 (UART 수신 + 1Hz 발행) |
+| `wcm6800_sensor` | Winson WCM6800 전류계 (UART 수신 + 10Hz 발행) |
+| `drone_sensors` | 전체 통합 launch 패키지 |
+| `drone_state` | (비활성) mavros Float32 재발행 노드 — 필요 시 활성화 가능 |
 
 ```
 anomaly_sensor_ros2/
@@ -20,27 +47,34 @@ anomaly_sensor_ros2/
 │   ├── respeaker/
 │   ├── thl100_sensor/
 │   ├── wcm6800_sensor/
-│   ├── drone_state/
-│   └── drone_sensors/
-│       └── launch/drone_sensor_launch.py
+│   ├── drone_sensors/
+│   │   └── launch/drone_sensor_launch.py
+│   └── drone_state/          # 비활성 (launch에서 제외)
 ├── scripts/
-│   ├── record_data.sh      # rosbag 녹화
-│   └── analyze_bag.py      # CSV 변환 + 그래프 생성
-├── install.sh              # 전체 환경 자동 설치
+│   ├── record_data.sh         # rosbag 녹화
+│   ├── analyze_bag.py         # CSV 변환 + 10Hz 정렬 + 그래프
+│   └── check_time_sync.sh     # 시간 동기화 확인
+├── install.sh                 # 전체 환경 자동 설치
 └── README.md
 ```
+
+---
+
+## 동작 확인 환경
+
+- Ubuntu 22.04 + ROS2 Humble (x86_64)
+- Raspberry Pi 4 + Ubuntu Server 22.04 + ROS2 Humble (arm64)
+
+---
 
 ## 하드웨어 요구사항
 
 - ReSpeaker Mic Array v3.0 (USB)
 - OSTSen-THL100 온습도/조도계 (UART → USB, 9600bps)
 - Winson WCM6800 전류계 (UART → USB, 9600bps)
-- ArduPilot FC (CubeOrange 등, USB 또는 TELEM)
+- ArduPilot FC (CubeOrange 등, USB 또는 TELEM2)
 
-## 동작 확인 환경
-
-- Ubuntu 22.04 + ROS2 Humble (x86_64)
-- Raspberry Pi 4 + Ubuntu Server 22.04 + ROS2 Humble (arm64)
+---
 
 ## 설치
 
@@ -57,66 +91,75 @@ bash install.sh
 - Python 의존성 설치 (pyusb, pyserial, numpy<2, pandas, matplotlib 등)
 - GeographicLib 데이터 설치 (mavros 필수)
 - udev 규칙 설정 (ReSpeaker, 시리얼 포트 권한)
-- 예전 워크스페이스 잔재가 `.bashrc`에 남아있다면 자동 정리
+- 예전 워크스페이스 잔재 `.bashrc` 자동 정리
 - ROS2 워크스페이스 빌드 (이전 빌드 산물 정리 후 진행)
-- 편의 alias 등록 (`start_drone`, `record_drone` 등)
+- 편의 alias 등록
 
 설치 후 **로그아웃 → 재로그인** 필요 (dialout 그룹 권한 적용).
 
-## USB 장치 ID 확인
+---
 
-장치마다 USB 포트 번호(`ttyUSB0`, `ttyACM0` 등)는 재연결 시 바뀔 수 있으므로 `/dev/serial/by-id/` 고유 ID를 사용합니다.
+## USB 장치 ID 확인 및 설정
 
 ```bash
 check_usb   # 또는: ls -la /dev/serial/by-id/
 ```
 
-장치 ID는 PC를 바꿔도 동일하지만(장치 자체의 시리얼번호 기반), 처음 설정하는 PC라면 확인된 ID를 `src/drone_sensors/launch/drone_sensor_launch.py`에 반영합니다.
+확인된 ID를 `src/drone_sensors/launch/drone_sensor_launch.py` 상단에 반영:
 
 ```python
-# FC 연결
+# FC 연결 (USB)
 FCU_URL = '/dev/serial/by-id/usb-Hex_ProfiCNC_CubeOrange_xxxxxxxx-if00:115200'
 
-# THL100, WCM6800 포트 (DeclareLaunchArgument 기본값)
-thl100_port_arg ...  default_value='/dev/serial/by-id/usb-Prolific_xxxx...'
-wcm6800_port_arg ... default_value='/dev/serial/by-id/usb-Diwell_xxxx...'
+# FC 연결 (TELEM2 UART로 변경 시)
+# FCU_URL = '/dev/serial/by-id/여기에_TELEM2_장치ID_입력:57600'
 ```
 
 수정 후 재빌드:
 ```bash
-cd ~/anomaly_sensor_ros2
 colcon build --packages-select drone_sensors --symlink-install
 ```
 
+---
+
 ## FC 데이터 스트림 설정 (최초 1회)
 
-ArduPilot은 기본적으로 일부 메시지만 전송합니다. mavros로 IMU/포지션 등 전체 데이터를 받으려면 SR 파라미터를 설정해야 합니다(FC에 영구 저장되므로 최초 1회만 필요).
+ArduPilot은 기본적으로 일부 메시지만 전송합니다. FC에 영구 저장되므로 최초 1회만 설정하면 됩니다.
 
 ```bash
 ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_RAW_SENS', value: {integer_value: 10}}"
 ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_EXT_STAT', value: {integer_value: 10}}"
-ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_RC_CHAN', value: {integer_value: 10}}"
+ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_RC_CHAN',  value: {integer_value: 10}}"
 ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_POSITION', value: {integer_value: 10}}"
-ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_EXTRA1', value: {integer_value: 10}}"
-ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_EXTRA2', value: {integer_value: 10}}"
-ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_EXTRA3', value: {integer_value: 10}}"
+ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_EXTRA1',   value: {integer_value: 10}}"
+ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_EXTRA2',   value: {integer_value: 10}}"
+ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_EXTRA3',   value: {integer_value: 10}}"
 ```
 
-`start_drone` 실행 중 `/mavros/imu/data` 등에 데이터가 안 보이면 이 단계를 먼저 확인하세요.
+---
 
 ## 실행
 
 ```bash
-start_drone     # mavros + 전체 센서 실행
+start_drone
+```
+
+`start_drone`은 다음 순서로 동작합니다:
+1. `check_time_sync.sh` — 시간 동기화 확인/보정
+2. 이전 mavros 프로세스 정리
+3. `ros2 launch drone_sensors drone_sensor_launch.py`
+
+발행 주기를 변경하려면:
+```bash
+ros2 launch drone_sensors drone_sensor_launch.py \
+  thl100_rate:=1.0 \
+  wcm6800_rate:=10.0 \
+  respeaker_update_rate:=50.0
 ```
 
 새 터미널에서 토픽 확인:
 ```bash
 check_topics
-ros2 topic echo /drone/attitude/roll
-ros2 topic echo /thl100/temperature
-ros2 topic echo /wcm6800/current
-ros2 topic echo /respeaker/doa
 ```
 
 종료:
@@ -124,108 +167,143 @@ ros2 topic echo /respeaker/doa
 stop_drone
 ```
 
-## mavros 동작 모드
+---
 
-`src/drone_sensors/launch/drone_sensor_launch.py` 상단에서 설정합니다.
+## UART 센서 발행 구조
 
-```python
-MAVROS_MODE = 'readonly'   # 데이터 수신 전용 (GCS 동시 연결 시 권장, FC에 명령 안 보냄)
-MAVROS_MODE = 'full'       # 전체 기능 (제어 명령 포함, 단독 운용 시)
+UART 수신과 토픽 발행을 분리하여 안정적인 주기를 보장합니다.
+
 ```
+UART 수신 스레드 (계속 수신)
+    ↓ 정상 패킷 파싱 시
+latest_data 저장
+    ↓
+ROS Timer (publish_rate_hz 주기)
+    ↓ stale_timeout_sec 이내 데이터만
+토픽 발행
+```
+
+| 센서 | 권장 발행 주기 | stale timeout | 이유 |
+|---|---|---|---|
+| THL100 온도·습도·조도 | 1Hz | 3초 | 환경값은 급격히 변하지 않음 |
+| WCM6800 전류 | 10Hz | 1초 | 모터·배터리 이상 변화 관찰 필요 |
+
+각 센서는 두 종류의 토픽을 발행합니다:
+- `/thl100/data`, `/wcm6800/data` — 지정 주기로 최신 정상값 발행 (JSON, Header timestamp 포함)
+- `/thl100/raw`, `/wcm6800/raw` — 수신 즉시 원본 패킷 발행
+
+---
+
+## 녹화 토픽 구성
+
+```
+MAVROS 원본         /mavros/state, /mavros/imu/data, /mavros/imu/data_raw
+                   /mavros/imu/mag, /mavros/local_position/pose
+                   /mavros/local_position/velocity_local
+                   /mavros/global_position/raw/fix, /mavros/global_position/raw/gps_vel
+                   /mavros/vfr_hud, /mavros/battery, /mavros/rc/out
+                   /mavros/setpoint_raw/target_attitude, /mavros/setpoint_raw/target_local
+
+THL100             /thl100/data, /thl100/raw
+WCM6800            /wcm6800/data, /wcm6800/raw
+ReSpeaker          /respeaker/doa, /respeaker/vad, /respeaker/energy
+```
+
+---
 
 ## 데이터 녹화
 
 ```bash
-record_drone 30     # 30초 녹화
+record_drone 60     # 60초 녹화
 record_drone         # 무제한 (Ctrl+C로 종료)
 ```
 
 `~/anomaly_data/anomaly_data_YYYYMMDD_HHMMSS/` 에 저장됩니다.
 
-기본 녹화 토픽은 `scripts/record_data.sh`의 `TOPICS` 배열에서 추가/제거할 수 있습니다. `/respeaker/audio`는 용량이 커서 기본 제외되어 있습니다.
+---
 
 ## 시간 동기화 (datetime 정확도)
 
-`analyze_drone`이 생성하는 `datetime` 컬럼은 라즈베리파이/PC의 **시스템 시계**를 기준으로 기록됩니다. 네트워크 연결 여부와 무관하게 데이터의 *상대적* 시간 간격은 항상 정확하지만, *절대* 시각이 실제와 일치하려면 시스템 시계가 NTP로 동기화되어 있어야 합니다.
+`start_drone`은 실행 전 자동으로 시간 동기화 상태를 확인합니다:
+- 인터넷 연결 + NTP 미동기화 → 자동 동기화 시도
+- 인터넷 없음 → 경고만 출력하고 계속 진행
 
-`start_drone`은 실행 전 `scripts/check_time_sync.sh`를 자동으로 호출하여:
-- 인터넷이 연결되어 있고 NTP 미동기화 상태면 → 자동으로 동기화 시도
-- 인터넷이 없으면 → 경고만 출력하고 계속 진행 (오프라인 비행도 막지 않음)
+야외 오프라인 비행 시에는 **비행 전 한 번이라도 인터넷에 연결**하여 시간을 맞춰두는 것을 권장합니다.
 
-수동으로 확인/동기화하려면:
+수동 확인:
 ```bash
 timedatectl status
-sudo timedatectl set-ntp true
 ```
 
-야외에서 WiFi 없이 비행할 예정이라면, **비행 전 한 번이라도 인터넷에 연결**해서 시간을 맞춰두는 것을 권장합니다.
+---
 
 ## 데이터 분석
 
 ```bash
-analyze_drone ~/anomaly_data/anomaly_data_20260616_112216
+analyze_drone ~/anomaly_data/anomaly_data_20260616_160131
 ```
 
-결과물:
+결과물 (`~/anomaly_data/analyzed/<bag이름>/`):
 ```
-anomaly_data_20260616_112216_csv/          # 토픽별 개별 CSV
-anomaly_data_20260616_112216_merged.csv    # 타임스탬프 기준 병합 통합 테이블
-anomaly_data_20260616_112216_overview.png  # 핵심 지표 그래프
-```
-
-터미널에는 토픽별 발행 Hz, min/max/mean 통계도 함께 출력됩니다.
-
-`_merged.csv`의 `datetime` 컬럼은 기본적으로 **한국 시간(Asia/Seoul)** 기준으로 표시됩니다. 다른 시간대에서 사용한다면 `scripts/analyze_bag.py` 상단의 `LOCAL_TZ` 값을 변경하세요.
-
-```python
-LOCAL_TZ = 'Asia/Seoul'  # 환경에 맞게 변경
+<bag이름>_csv/                  # 토픽별 개별 CSV
+<bag이름>_merged_10hz.csv       # 10Hz 기준 정렬 통합 테이블
+<bag이름>_overview.png          # 핵심 지표 그래프
 ```
 
-## 발행 토픽 전체 목록
+`_merged_10hz.csv` 컬럼 구성:
 
-### /drone/* (mavros 기반 커스텀 토픽)
-- 로컬좌표/목표: `local_ned/{x,y,z}`, `local_ned_target/{x,y,z}`
-- 속도/목표: `local_ned_vel/{vx,vy,vz}`, `local_ned_vel_target/{vx,vy,vz}`
-- 가속도: `accel/{x,y,z}`
-- 자세/목표: `attitude/{roll,pitch,yaw}`, `attitude_target/{roll,pitch,yaw}`
-- 각속도/목표: `attitude_rate/{roll,pitch,yaw}`, `attitude_rate_target/{roll,pitch,yaw}`
-- 배터리: `battery/{voltage,current}`
-- GPS: `gps/{latitude,longitude,altitude,ground_speed,course_angle}`
-- Gyro: `gyro/{x,y,z}`
-- 지자기: `mag/{x,y,z}`
-- 모터 PWM: `rcout/{c1..c8,idle_pwm,max_pwm}`
+| 그룹 | 컬럼 |
+|---|---|
+| 시간 | `datetime` (KST), `time_ms`, `time_sec` |
+| 자세 | `ATT_Roll/Pitch/Yaw`, `ATT_DesRoll/DesPitch/DesYaw` |
+| IMU | `IMU_AccX/Y/Z`, `IMU_GyrX/Y/Z` |
+| 각속도 | `RATE_R/P/Y`, `RATE_RDes/PDes/YDes` |
+| 배터리 | `BAT_Volt`, `BAT_Curr`, `BAT_CurrTot` |
+| 모터 PWM | `RCOU_C1~C8` |
+| 진동 | `VIBE_X/Y/Z` |
+| GPS | `GPS_Lat/Lon/Alt`, `GPS_GroundSpeed/CourseAngle` |
+| 로컬 위치/속도 | `LocalNED_X/Y/Z`, `LocalNED_VX/VY/VZ` |
+| FC 상태 | `State_Armed`, `State_Mode`, `State_Connected` |
+| 환경 | `THL100_Temp/Humi/Light` |
+| 전류 | `WCM_Current`, `WCM_Type` |
+| 마이크 | `MIC_DoA`, `MIC_VAD`, `MIC_Energy` |
 
-### /respeaker/*
-- `doa` (Int32, 0~359도), `vad` (Bool), `audio` (UInt8MultiArray, 16kHz PCM), `energy` (Float32, RMS)
+**10Hz 정렬 방식:**
+- 기준 시간축: 100ms 간격
+- 모든 값: forward fill (최근값 유지, 미래 데이터 사용 금지)
+- 타임존: 기본 Asia/Seoul — `scripts/analyze_bag.py` 상단 `LOCAL_TZ` 변경 가능
 
-### /thl100/*
-- `temperature` (°C), `humidity` (%RH), `light` (Lux), `raw`
+---
 
-### /wcm6800/*
-- `current` (A, DC는 부호 포함), `current_type` (AC/DC+/DC-), `raw`
+## 누락 데이터 안내 (MAVLink 경로 한계)
+
+| 항목 | 상태 | 대안 |
+|---|---|---|
+| CTRL RMS (PID 로그) | MAVLink 미지원 | FC 내부 BIN 파일에서만 취득 가능 |
+| BAT_Res (내부저항) | mavros 미제공 | BIN 파일 |
+| POWR (전원 플래그) | 일부 미지원 | BIN 파일 |
+| VIBE X/Y/Z | `/mavros/vibration/raw/vibration` | SR 파라미터 설정 후 수신 가능 |
+
+---
 
 ## 트러블슈팅
 
 | 증상 | 원인 | 해결 |
 |---|---|---|
-| ReSpeaker USB Pipe error | USB 인터페이스 충돌 (ALSA 오디오 인터페이스와 control transfer 동시 점유) | `respeaker_full_node.py`의 Tuning 클래스가 SEEED Control 인터페이스만 별도로 claim하고 있어야 함(이미 적용됨). `set_configuration()`/`detach_kernel_driver()` 호출하지 않을 것 |
-| `ros2 launch` 실행 시 `KeyError: 'launch'` | `drone_sensors/launch/` 폴더에 `__init__.py`가 있어서 ROS2의 `launch` 모듈과 이름 충돌 | `rm src/drone_sensors/launch/__init__.py` 후 `build/install/log` 삭제하고 재빌드 (install.sh가 자동 처리) |
-| mavros 중복 실행 시 크래시 (`invalid allocator`) | 이전 mavros 프로세스가 종료되지 않은 채 새로 실행됨 | `pkill -f mavros_node` 후 재실행. `start_drone` alias가 자동으로 처리함 |
-| mavros를 launch 파일에 직접 Node로 추가하면 크래시 | launch가 `-r __node:=mavros`로 강제 노드 이름 재지정을 시도해 충돌 | `IncludeLaunchDescription` + `AnyLaunchDescriptionSource`로 mavros의 `apm.launch`(XML)를 include하는 방식 사용(이미 적용됨) |
-| rqt 또는 직접 구독 시 mavros 토픽 안 보임 | QoS 불일치 (mavros는 BEST_EFFORT) | `ros2 topic echo <topic> --qos-reliability best_effort` 사용, 또는 구독 노드에서 동일 QoS 프로파일 적용 |
-| `/mavros/imu/data` 등 일부 토픽이 발행 안 됨 | ArduPilot의 SR 스트림 파라미터 미설정 | 위 "FC 데이터 스트림 설정" 단계 진행 |
-| USB 포트 번호 변경 | 재연결 시 ttyUSB/ttyACM 번호가 매번 달라짐 | `/dev/serial/by-id/` 고유 ID 사용 (이미 적용됨) |
-| `pip install --break-system-packages` 옵션 오류 | pip 버전이 낮아 해당 옵션 미지원 (Ubuntu 22.04 기본 pip 22.0.2) | install.sh가 pip을 먼저 업그레이드하고 `~/.local/bin`을 PATH에 등록함(이미 적용됨) |
-| `colcon: command not found` | `python3-colcon-common-extensions` 미설치 | install.sh의 시스템 의존성 목록에 포함됨(이미 적용됨) |
-| `colcon build` 시 `File exists` 에러 (특정 패키지) | 이전 빌드의 `build/install` 잔여 파일과 충돌 | install.sh가 빌드 전 `build/install/log`를 정리함(이미 적용됨). 수동 빌드 시 `rm -rf build/<pkg> install/<pkg>` 후 재시도 |
-| GitHub 저장소 클론 후 특정 패키지 폴더가 비어 있음 | 해당 패키지가 git submodule로 등록되어 일반 클론으로 내용이 안 받아짐 | `git rm --cached <pkg>` → `rm -rf <pkg>/.git` → `git add <pkg>` 로 일반 디렉토리로 전환 |
-| matplotlib import 시 NumPy 관련 `ImportError`/`_ARRAY_API not found` | NumPy 2.x와 시스템 matplotlib(NumPy 1.x 빌드) 비호환 | `pip install "numpy<2"` (install.sh에 이미 반영) |
-| 그래프 생성 시 `Multi-dimensional indexing... no longer supported` | 최신 pandas Series를 matplotlib에 직접 전달 | `analyze_bag.py`에서 `.to_numpy()`로 변환 후 plot (이미 적용됨) |
-| THL100 파싱 시 "필드 수 오류" (패킷이 붙어서 들어옴) | UART 버퍼에 두 패킷이 겹쳐 수신됨 | `@` 기준으로 마지막 완전한 패킷만 추출하도록 파싱 로직 보완 필요 |
-| FC 연결 끊김 (`mavconn: serial0: write: No such device`) | USB 케이블 분리 또는 FC 재부팅 | USB 재연결 후 `stop_drone` → `start_drone` |
-| `record_drone`/`analyze_drone` alias가 안 먹음 | 이전 `.bashrc` 설정이 새 환경에 반영 안 됨 | 새 터미널 열거나 `source ~/.bashrc` 실행 |
-| 새 PC/SD카드로 이전 후 `ros2_ws/install/setup.bash: No such file or directory` | 예전 워크스페이스(`~/ros2_ws`) source 줄이 `.bashrc`에 남아있음 | install.sh가 해당 줄을 자동 정리함(이미 적용됨) |
-| Excel에서 본 `time_sec`이 토픽마다 다른 시점을 0초로 잡은 것처럼 보임 | `analyze_bag.py`가 과거에는 토픽별로 첫 메시지 기준 0초를 따로 계산했음 | 전체 bag의 가장 빠른 timestamp를 공통 기준으로 사용하도록 수정(이미 적용됨). `_merged.csv`의 `datetime`, `time_ms`, `time_sec` 컬럼 모두 동일 기준 |
-| `analyze_drone` 결과 파일이 `~/anomaly_data/`가 아닌 홈 디렉토리에 생김 | 실행한 현재 디렉토리(cwd)에 출력하던 구버전 로직 | bag 파일 경로 기준 `<bag폴더>/analyzed/<bag이름>/`에 저장하도록 수정(이미 적용됨) |
-| `datetime` 값이 실제 시각과 다름 (예: 1970년 또는 부팅 전 날짜) | 라즈베리파이에 RTC 배터리가 없어 NTP 동기화 전까지 시스템 시계가 부정확함 | `start_drone` 실행 시 자동으로 시간 동기화 확인/시도함(이미 적용됨). 오프라인 환경이면 비행 전 한 번 인터넷 연결해 시간을 맞춰둘 것 |
-| `_merged.csv`의 `datetime`이 파일명(bag 폴더명)의 시각보다 9시간 빠르게 보임 | rosbag 내부 timestamp는 UTC epoch 기준인데, 과거 버전의 `analyze_bag.py`가 변환 시 UTC를 그대로 표시함(한국은 UTC+9) | `pd.to_datetime(..., utc=True)` 후 `LOCAL_TZ`(기본값 `Asia/Seoul`)로 변환하도록 수정(이미 적용됨). 다른 시간대에서 사용 시 `analyze_bag.py` 상단의 `LOCAL_TZ` 값을 변경 |
+| ReSpeaker USB Pipe error | USB 인터페이스 충돌 | `respeaker_full_node.py`의 Tuning 클래스가 SEEED Control 인터페이스만 claim하는지 확인 |
+| `KeyError: 'launch'` | `drone_sensors/launch/__init__.py` 존재 | `rm src/drone_sensors/launch/__init__.py` 후 재빌드 (install.sh 자동 처리) |
+| mavros 크래시 (`invalid allocator`) | 이전 mavros 프로세스 중복 실행 | `pkill -f mavros_node` 후 재실행 (`start_drone` alias가 자동 처리) |
+| rqt에서 mavros 토픽 안 보임 | QoS 불일치 (mavros는 BEST_EFFORT) | `ros2 topic echo <topic> --qos-reliability best_effort` |
+| `/mavros/imu/data` 등 토픽 미발행 | ArduPilot SR 파라미터 미설정 | 위 "FC 데이터 스트림 설정" 단계 진행 |
+| `mavros/vibration` 토픽 비어있음 | SR 파라미터 또는 FC 펌웨어 버전 | `SR0_EXTRA3` 설정 확인 |
+| USB 포트 번호 변경 | 재연결 시 번호 변동 | `/dev/serial/by-id/` 사용 (이미 적용됨) |
+| `pip install` 옵션 오류 | pip 버전 낮음 | install.sh가 pip 업그레이드 후 재시도 (이미 적용됨) |
+| `colcon build` File exists 에러 | 이전 빌드 잔여 파일 충돌 | install.sh가 빌드 전 자동 정리 (이미 적용됨) |
+| GitHub 클론 후 패키지 폴더 비어있음 | git submodule로 등록됨 | `git rm --cached <pkg>` → `rm -rf <pkg>/.git` → `git add <pkg>` |
+| matplotlib NumPy 오류 | NumPy 2.x 비호환 | `pip install "numpy<2"` (install.sh 적용됨) |
+| THL100 "필드 수 오류" | UART 버퍼에 패킷 중복 수신 | `@` 기준 마지막 패킷만 파싱하도록 처리됨 |
+| `datetime`이 9시간 빠름 | UTC → KST 변환 누락 | `analyze_bag.py`에서 `LOCAL_TZ` 기준 변환 처리됨 |
+| `datetime` 값이 부팅 전 날짜 | NTP 미동기화 | `start_drone` 실행 시 자동 확인/보정 |
+| `ros2_ws/install/setup.bash` 없음 | 예전 워크스페이스 잔재 | install.sh가 자동 정리 (이미 적용됨) |
+| `record_drone`/`analyze_drone` alias 없음 | `.bashrc` 미적용 | `source ~/.bashrc` 또는 새 터미널 열기 |
+| FC 연결 끊김 (`No such device`) | USB 분리 또는 FC 재부팅 | USB 재연결 후 `stop_drone` → `start_drone` |
