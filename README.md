@@ -138,6 +138,48 @@ ros2 service call /mavros/param/set mavros_msgs/srv/ParamSetV2 "{param_id: 'SR0_
 
 ---
 
+## 편의 alias (install.sh 자동 등록)
+
+`bash install.sh` 실행 시 `.bashrc`에 자동으로 등록됩니다. 새 터미널을 열거나 `source ~/.bashrc` 후 사용 가능합니다.
+
+| alias | 실제 동작 | 설명 |
+|---|---|---|
+| `start_drone` | `check_time_sync.sh` → `pkill mavros_node` → `ros2 launch drone_sensors drone_sensor_launch.py` | 시간 동기화 확인 후 이전 mavros 정리, 전체 센서 실행 |
+| `stop_drone` | `pkill mavros_node` + `pkill drone_sensor_launch` | 모든 센서 노드 종료 |
+| `check_topics` | `ros2 topic list \| grep -E "drone\|mavros\|respeaker\|thl100\|wcm6800"` | 관련 토픽 목록만 필터링해서 출력 |
+| `check_usb` | `ls -la /dev/serial/by-id/` | 연결된 USB 시리얼 장치 ID 목록 확인 |
+| `record_drone` | `scripts/record_data.sh` | rosbag 녹화 실행 |
+| `analyze_drone` | `python3 scripts/analyze_bag.py` | bag 파일 분석 (CSV + 그래프 생성) |
+
+### 사용 예시
+
+```bash
+# 전체 센서 실행
+start_drone
+
+# 30초 녹화
+record_drone 30
+
+# 무제한 녹화 (Ctrl+C로 종료)
+record_drone
+
+# 분석
+analyze_drone ~/anomaly_data/anomaly_data_20260616_160131
+
+# 연결된 USB 장치 확인
+check_usb
+
+# 현재 발행 중인 관련 토픽 확인
+check_topics
+
+# 전체 종료
+stop_drone
+```
+
+> alias가 동작하지 않으면 `source ~/.bashrc` 를 실행하거나 새 터미널을 여세요.
+
+---
+
 ## 실행
 
 ```bash
