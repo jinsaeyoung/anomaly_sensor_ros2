@@ -1,1 +1,0 @@
-/home/xd/anomaly_sensor_ros2/src/drone_sensors/setup.py

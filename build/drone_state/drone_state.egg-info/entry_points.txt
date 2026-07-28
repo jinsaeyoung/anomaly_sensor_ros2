@@ -1,3 +1,0 @@
-[console_scripts]
-drone_state_node = drone_state.drone_state_node:main
-

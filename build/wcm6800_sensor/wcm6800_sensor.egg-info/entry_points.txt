@@ -1,3 +1,0 @@
-[console_scripts]
-wcm6800_node = wcm6800_sensor.wcm6800_uart_node:main
-
