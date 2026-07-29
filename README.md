@@ -302,10 +302,25 @@ analyze_drone ~/anomaly_data/anomaly_data_20260616_160131
 | 2 | UART JSON 내부 수신 시각 (`stamp_sec`/`stamp_nsec`) |
 | 3 | rosbag 기록 시각 (Header 없는 메시지) |
 
-개별 CSV에는 세 값이 모두 보존됩니다.
+개별 CSV에는 네 값이 모두 보존됩니다.
 - `source_time_ns` — 데이터 발생 시각
 - `bag_time_ns` — rosbag 기록 시각
 - `transport_delay_ms` — 두 값의 차이 (USB/ROS 스케줄링 지연)
+- `stamp_source` — 어떤 시각을 사용했는지 (`header` / `uart` / `bag` / `bag(skew)`)
+
+**header.stamp 신뢰성 검증**
+
+GPS fix가 없으면 ArduPilot이 부팅 후 경과시간을 타임스탬프로 사용해, `header.stamp`가 시스템 시각과 수 시간까지 어긋날 수 있습니다. 이를 그대로 쓰면 정렬 기준이 무너져 merged CSV 행 수가 폭증합니다.
+
+분석기는 `header.stamp`와 rosbag 기록 시각의 차이가 `MAX_STAMP_SKEW_SEC`(기본 5초)를 넘으면 해당 값을 버리고 `bag_time`을 사용하며, 실행 시 아래처럼 알려줍니다.
+
+```
+[경고] header.stamp 가 rosbag 기록 시각과 5.0초 이상 어긋나 bag_time 으로 대체한 토픽:
+  /mavros/global_position/raw/fix   597/597 건
+  /mavros/rc/out                    587/587 건
+```
+
+`stamp_source` 컬럼에서 메시지별로 어떤 시각이 쓰였는지 확인할 수 있습니다. GPS fix를 확보하면 대부분 `header`로 바뀝니다.
 
 ### 좌표계
 
@@ -432,3 +447,5 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0
 | stale 판정이 갑자기 오작동 | NTP 동기화로 시스템 시각 점프 | 경과시간을 `time.monotonic()` 기준으로 측정 (적용됨) |
 | `record_drone` 경로 오류 | 다른 경로에 클론 | 스크립트가 워크스페이스 자동 탐지 (적용됨) |
 | FC 연결 끊김 (`No such device`) | USB 분리/FC 재부팅 | USB 재연결 후 `stop_drone` → `start_drone` |
+| `record_drone` 실행 시 `AMENT_TRACE_SETUP_FILES: 바인딩 해제한 변수` | 스크립트의 `set -u`와 ROS `setup.bash`의 미정의 변수 참조 충돌 | ROS source 구간만 `set +u`로 감싸도록 수정 (적용됨) |
+| 분석 시 duration이 수 시간, merged CSV가 수십만 행 | GPS fix 없어 FC `header.stamp`가 부팅 경과시간 기준 → 시스템 시각과 큰 차이 | `MAX_STAMP_SKEW_SEC` 초과 시 `bag_time`으로 자동 대체 (적용됨). 실행 시 경고와 `stamp_source` 컬럼으로 확인 가능 |

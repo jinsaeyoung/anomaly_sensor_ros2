@@ -17,13 +17,22 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${ANOMALY_WS:-$(dirname "$SCRIPT_DIR")}"
 
-# ROS 환경 로드
+# ── ROS 환경 로드 ─────────────────────────────────────────────────────
+# ROS setup.bash 는 미정의 변수(AMENT_TRACE_SETUP_FILES 등)를 참조하므로
+# 이 구간에서만 set -u 를 해제합니다. (해제하지 않으면 unbound variable 로 종료)
+set +u
 if [ -f "/opt/ros/humble/setup.bash" ]; then
     source /opt/ros/humble/setup.bash
 fi
 if [ -f "$WS/install/setup.bash" ]; then
     source "$WS/install/setup.bash"
+    WS_SOURCED=1
 else
+    WS_SOURCED=0
+fi
+set -u
+
+if [ "$WS_SOURCED" -eq 0 ]; then
     echo "경고: $WS/install/setup.bash 를 찾을 수 없습니다. 빌드가 필요할 수 있습니다."
 fi
 

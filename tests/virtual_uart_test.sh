@@ -20,8 +20,11 @@ if ! command -v socat &> /dev/null; then
     exit 1
 fi
 
+# ROS setup.bash 는 미정의 변수를 참조하므로 이 구간만 set -u 해제
+set +u
 source /opt/ros/humble/setup.bash
 [ -f "$WS/install/setup.bash" ] && source "$WS/install/setup.bash"
+set -u
 
 PTY_A=/tmp/vuart_a
 PTY_B=/tmp/vuart_b

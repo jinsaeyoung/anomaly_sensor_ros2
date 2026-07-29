@@ -38,6 +38,12 @@ from rclpy.serialization import deserialize_message
 LOCAL_TZ    = 'Asia/Seoul'   # 로컬 타임존
 RESAMPLE_HZ = 10             # merged CSV 정렬 주기
 
+# header.stamp 신뢰 임계값 (초)
+#   FC의 GPS fix가 없으면 ArduPilot이 부팅 후 경과시간을 타임스탬프로 사용하여
+#   시스템 시각과 수 시간까지 어긋날 수 있습니다.
+#   rosbag 기록 시각과 이 값 이상 차이나면 header.stamp를 버리고 bag_time을 사용합니다.
+MAX_STAMP_SKEW_SEC = 5.0
+
 # 센서별 허용 최대 age (초). 초과 시 NaN 처리 + stale 플래그
 STALE_LIMITS = {
     'THL100':  3.0,   # 1Hz 센서 → 3초
@@ -59,7 +65,7 @@ STALE_LIMITS = {
 DEFAULT_STALE = 2.0
 
 # merged CSV에서 제외할 컬럼 (문자열 원시 패킷 등)
-EXCLUDE_FROM_MERGED = {'THL100_Raw', 'WCM_Raw'}
+EXCLUDE_FROM_MERGED = {'THL100_Raw', 'WCM_Raw', 'stamp_source'}
 
 
 def quat_to_euler(x, y, z, w):
@@ -73,14 +79,26 @@ def quat_to_euler(x, y, z, w):
 def get_source_time_ns(topic, msg, bag_time_ns):
     """
     데이터의 실제 발생 시각(ns) 추출
+
     우선순위: MAVROS header.stamp > UART JSON stamp > rosbag 기록 시각
+
+    단, 추출한 시각이 rosbag 기록 시각과 MAX_STAMP_SKEW_SEC 이상 어긋나면
+    신뢰할 수 없는 값으로 보고 bag_time_ns 로 대체합니다.
+    (GPS fix 없을 때 FC가 부팅 후 경과시간을 타임스탬프로 쓰는 경우 대응)
+
+    반환: (source_time_ns, source_kind)
+      source_kind: 'header' | 'uart' | 'bag' | 'bag(skew)'
     """
-    # 1) ROS Header가 있는 메시지 (MAVROS 대부분)
+    max_skew_ns = int(MAX_STAMP_SKEW_SEC * 1e9)
+
+    # 1) ROS Header
     if hasattr(msg, 'header') and hasattr(msg.header, 'stamp'):
         s = msg.header.stamp
         ns = int(s.sec) * 1_000_000_000 + int(s.nanosec)
         if ns > 0:
-            return ns
+            if abs(ns - bag_time_ns) <= max_skew_ns:
+                return ns, 'header'
+            return bag_time_ns, 'bag(skew)'
 
     # 2) UART JSON 페이로드 내부 시각
     if topic in ('/thl100/data', '/wcm6800/data') and hasattr(msg, 'data'):
@@ -89,12 +107,14 @@ def get_source_time_ns(topic, msg, bag_time_ns):
             if 'stamp_sec' in d and 'stamp_nsec' in d:
                 ns = int(d['stamp_sec']) * 1_000_000_000 + int(d['stamp_nsec'])
                 if ns > 0:
-                    return ns
+                    if abs(ns - bag_time_ns) <= max_skew_ns:
+                        return ns, 'uart'
+                    return bag_time_ns, 'bag(skew)'
         except Exception:
             pass
 
-    # 3) Header 없는 메시지 → rosbag 기록 시각
-    return bag_time_ns
+    # 3) Header 없는 메시지
+    return bag_time_ns, 'bag'
 
 
 def parse_msg(topic, msg):
@@ -253,6 +273,7 @@ def read_bag(bag_path):
     topics = {r[0]: (r[1], r[2]) for r in cursor.fetchall()}
 
     data = defaultdict(list)
+    skew_stat = defaultdict(int)   # 토픽별 skew fallback 횟수
     cursor.execute("SELECT topic_id, timestamp, data FROM messages ORDER BY timestamp")
 
     for topic_id, bag_ts, raw in cursor.fetchall():
@@ -267,12 +288,26 @@ def read_bag(bag_path):
         if not row:
             continue
 
-        src_ts = get_source_time_ns(topic_name, msg, bag_ts)
+        src_ts, src_kind = get_source_time_ns(topic_name, msg, bag_ts)
+        if src_kind == 'bag(skew)':
+            skew_stat[topic_name] += 1
+
         row['bag_time_ns']    = bag_ts
         row['source_time_ns'] = src_ts
+        row['stamp_source']   = src_kind
         data[topic_name].append(row)
 
     conn.close()
+
+    # skew 발생 토픽 경고
+    if skew_stat:
+        print(f'\n[경고] header.stamp 가 rosbag 기록 시각과 '
+              f'{MAX_STAMP_SKEW_SEC}초 이상 어긋나 bag_time 으로 대체한 토픽:')
+        for t, n in sorted(skew_stat.items(), key=lambda x: -x[1]):
+            total = len(data[t])
+            print(f'  {t:46s} {n}/{total} 건')
+        print('  (FC의 GPS fix 없음 → ArduPilot 부팅 후 경과시간을 '
+              'timestamp로 사용하는 경우 발생)')
 
     all_src = [r['source_time_ns'] for rows in data.values() for r in rows]
     if not all_src:
@@ -330,6 +365,20 @@ def merge_10hz(dfs, output_prefix, t0_ns):
         return None
 
     duration = max(all_times)
+
+    # 비정상적으로 긴 duration 방어 (타임스탬프 이상 시 행 수 폭증 방지)
+    MAX_REASONABLE_SEC = 6 * 3600   # 6시간
+    if duration > MAX_REASONABLE_SEC:
+        print(f'  [경고] 계산된 duration이 {duration:.0f}초로 비정상적으로 깁니다.')
+        print(f'         일부 토픽의 타임스탬프가 어긋났을 가능성이 있습니다.')
+        print(f'         중앙값 기준으로 재계산합니다.')
+        # 각 토픽의 최대 time_sec 중 중앙값을 기준으로 사용
+        per_topic_max = sorted(
+            df['time_sec'].max() for df in dfs.values() if len(df) > 0
+        )
+        duration = per_topic_max[len(per_topic_max) // 2]
+        print(f'         → duration = {duration:.1f}초')
+
     n_steps  = int(duration * RESAMPLE_HZ) + 1
     grid     = np.arange(n_steps) / RESAMPLE_HZ
     merged   = pd.DataFrame({'time_sec': grid})
@@ -343,7 +392,7 @@ def merge_10hz(dfs, output_prefix, t0_ns):
 
         value_cols = [c for c in df.columns
                       if c not in ('bag_time_ns', 'source_time_ns', 'time_sec',
-                                   'datetime', 'transport_delay_ms')
+                                   'datetime', 'transport_delay_ms', 'stamp_source')
                       and c not in EXCLUDE_FROM_MERGED]
         if not value_cols:
             continue
@@ -396,17 +445,26 @@ def merge_10hz(dfs, output_prefix, t0_ns):
 
 
 def print_summary(dfs):
-    print('\n' + '=' * 78)
-    print(' 토픽별 요약  (원본 header.stamp 기준)')
-    print('=' * 78)
+    print('\n' + '=' * 92)
+    print(' 토픽별 요약')
+    print('=' * 92)
+    print(f'{"토픽":46s} {"건수":>6s} {"구간":>8s} {"주기":>8s} {"지연":>9s}  시각출처')
+    print('-' * 92)
     for topic, df in dfs.items():
         n = len(df)
         if n == 0:
             continue
-        dur = df['time_sec'].iloc[-1] - df['time_sec'].iloc[0] if n > 1 else 0
-        hz  = n / dur if dur > 0 else 0
+        dur   = df['time_sec'].iloc[-1] - df['time_sec'].iloc[0] if n > 1 else 0
+        hz    = n / dur if dur > 0 else 0
         delay = df['transport_delay_ms'].mean() if 'transport_delay_ms' in df else 0
-        print(f'{topic:46s} n={n:6d} {dur:6.1f}s ~{hz:6.1f}Hz  delay={delay:6.1f}ms')
+
+        if 'stamp_source' in df.columns:
+            kinds = df['stamp_source'].value_counts()
+            src = ', '.join(f'{k}({v})' for k, v in kinds.items())
+        else:
+            src = '-'
+
+        print(f'{topic:46s} {n:6d} {dur:7.1f}s {hz:7.1f}Hz {delay:8.1f}ms  {src}')
 
 
 def plot_key_topics(dfs, output_prefix):
