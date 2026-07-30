@@ -44,23 +44,57 @@ BAG_NAME="anomaly_data_$(date +%Y%m%d_%H%M%S)"
 DURATION="${1:-}"
 
 TOPICS=(
-    # ── MAVROS 원본 토픽 ───────────────────────────────────────────────
-    /mavros/state
+    # ── MAVROS: IMU / 자세 / 진동 ──────────────────────────────────────
     /mavros/imu/data
     /mavros/imu/data_raw
     /mavros/imu/mag
-    /mavros/local_position/pose
-    /mavros/local_position/velocity_local
-    /mavros/global_position/raw/fix
-    /mavros/global_position/raw/gps_vel
-    /mavros/vfr_hud
-    /mavros/battery
-    /mavros/rc/out
     /mavros/vibration/raw/vibration
+
+    # ── MAVROS: RC 입력 / 모터 출력 ────────────────────────────────────
+    /mavros/rc/in
+    /mavros/rc/out
+
+    # ── MAVROS: 제어 목표값 ───────────────────────────────────────────
     /mavros/setpoint_raw/target_attitude
     /mavros/setpoint_raw/target_local
 
-    # ── THL100 온습도/조도 ─────────────────────────────────────────────
+    # ── MAVROS: 로컬 위치 / 속도 / 가속도 ─────────────────────────────
+    /mavros/local_position/pose
+    /mavros/local_position/velocity_local
+    /mavros/local_position/accel
+
+    # ── MAVROS: GPS / 고도 ────────────────────────────────────────────
+    /mavros/global_position/raw/fix
+    /mavros/global_position/raw/gps_vel
+    /mavros/global_position/raw/satellites
+    /mavros/global_position/rel_alt
+    /mavros/altitude
+
+    # ── MAVROS: 전력 / ESC ────────────────────────────────────────────
+    /mavros/battery
+    /mavros/esc_telemetry/telemetry
+    /mavros/esc_status/status
+
+    # ── MAVROS: 기체 상태 ─────────────────────────────────────────────
+    /mavros/vfr_hud
+    /mavros/state
+    /mavros/extended_state
+    /mavros/sys_status
+    /mavros/statustext/recv
+    /mavros/status_event
+
+    # ── MAVROS: 항법 / 환경 ───────────────────────────────────────────
+    /mavros/nav_controller_output/output
+    /mavros/wind_estimation
+
+    # ── 라벨 / 실험 메타데이터 (외부에서 발행) ────────────────────────
+    /anomaly/label
+    /test/metadata
+
+    # ── 시스템 진단 ───────────────────────────────────────────────────
+    /diagnostics
+
+    # ── THL100 온습도/조도 ────────────────────────────────────────────
     /thl100/data
     /thl100/raw
 

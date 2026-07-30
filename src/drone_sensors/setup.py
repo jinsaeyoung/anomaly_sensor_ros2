@@ -23,5 +23,9 @@ setup(
     maintainer_email='user@example.com',
     description='Integrated launch package for anomaly_sensor_ros2',
     license='MIT',
-    entry_points={'console_scripts': []},
+    entry_points={
+        'console_scripts': [
+            'auto_record_node = drone_sensors.auto_record_node:main',
+        ],
+    },
 )

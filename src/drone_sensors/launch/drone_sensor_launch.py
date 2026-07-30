@@ -8,11 +8,12 @@
   - respeaker_full_node (마이크)
   - thl100_node         (온습도/조도, 기본 1Hz)
   - wcm6800_node        (전류계, 기본 10Hz)
+  - auto_record_node    (arm/disarm 자동 녹화, use_auto_record:=true 일 때)
 
 실행 예시:
   ros2 launch drone_sensors drone_sensor_launch.py
+  ros2 launch drone_sensors drone_sensor_launch.py use_auto_record:=true
   ros2 launch drone_sensors drone_sensor_launch.py fcu_url:=/dev/ttyACM0:115200
-  ros2 launch drone_sensors drone_sensor_launch.py thl100_rate:=1.0 wcm6800_rate:=10.0
 """
 
 import os
@@ -21,6 +22,7 @@ from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
 from ament_index_python.packages import get_package_share_directory
 
 
@@ -77,6 +79,33 @@ def generate_launch_description():
         'wcm6800_rate',
         default_value='10.0',
         description='WCM6800 발행 주기 Hz'
+    )
+
+    # ── 자동 녹화 관련 인자 ───────────────────────────────────────────
+    use_auto_record_arg = DeclareLaunchArgument(
+        'use_auto_record',
+        default_value='false',
+        description='arm/disarm 연동 자동 녹화 활성화 (온보드 운용 시 true)'
+    )
+    save_dir_arg = DeclareLaunchArgument(
+        'save_dir',
+        default_value=os.path.expanduser('~/anomaly_data'),
+        description='rosbag 저장 경로'
+    )
+    post_disarm_sec_arg = DeclareLaunchArgument(
+        'post_disarm_sec',
+        default_value='10.0',
+        description='disarm 후 추가 녹화 시간(초)'
+    )
+    max_bag_duration_arg = DeclareLaunchArgument(
+        'max_bag_duration',
+        default_value='300',
+        description='bag 분할 주기(초). 0이면 분할하지 않음'
+    )
+    min_free_gb_arg = DeclareLaunchArgument(
+        'min_free_gb',
+        default_value='2.0',
+        description='녹화에 필요한 최소 디스크 여유 공간(GB)'
     )
 
     # ── mavros (원본 토픽 그대로 사용) ────────────────────────────────
@@ -139,6 +168,23 @@ def generate_launch_description():
         }]
     )
 
+    # ── 자동 녹화 노드 (use_auto_record:=true 일 때만 실행) ───────────
+    auto_record_node = Node(
+        package='drone_sensors',
+        executable='auto_record_node',
+        name='auto_record_node',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('use_auto_record')),
+        parameters=[{
+            'save_dir':         LaunchConfiguration('save_dir'),
+            'auto_on_arm':      True,
+            'post_disarm_sec':  LaunchConfiguration('post_disarm_sec'),
+            'max_bag_duration': LaunchConfiguration('max_bag_duration'),
+            'min_free_gb':      LaunchConfiguration('min_free_gb'),
+            'name_prefix':      'flight',
+        }]
+    )
+
     return LaunchDescription([
         fcu_url_arg,
         thl100_port_arg,
@@ -146,9 +192,15 @@ def generate_launch_description():
         respeaker_rate_arg,
         thl100_rate_arg,
         wcm6800_rate_arg,
+        use_auto_record_arg,
+        save_dir_arg,
+        post_disarm_sec_arg,
+        max_bag_duration_arg,
+        min_free_gb_arg,
 
         mavros_launch,
         respeaker_node,
         thl100_node,
         wcm6800_node,
+        auto_record_node,
     ])

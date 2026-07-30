@@ -101,6 +101,18 @@ if [ -d "$PKG_DIR" ]; then
     # launch/__init__.py 제거 (ROS2 launch 모듈 이름 충돌 방지)
     rm -f "$PKG_DIR/launch/__init__.py"
 
+    # auto_record_node 가 rclpy / std_msgs / mavros_msgs 를 사용하므로
+    # package.xml 에 의존성이 없으면 자동으로 추가합니다.
+    PKG_XML="$PKG_DIR/package.xml"
+    if [ -f "$PKG_XML" ]; then
+        for dep in rclpy std_msgs mavros_msgs; do
+            if ! grep -q "<depend>$dep</depend>" "$PKG_XML"; then
+                sed -i "s|</package>|  <depend>$dep</depend>\n</package>|" "$PKG_XML"
+                echo "  + package.xml 의존성 추가: $dep"
+            fi
+        done
+    fi
+
     cat > "$PKG_DIR/setup.cfg" << 'CFGEOF'
 [develop]
 script_dir=$base/lib/drone_sensors
@@ -134,7 +146,11 @@ setup(
     maintainer_email='user@example.com',
     description='Integrated launch package for anomaly_sensor_ros2',
     license='MIT',
-    entry_points={'console_scripts': []},
+    entry_points={
+        'console_scripts': [
+            'auto_record_node = drone_sensors.auto_record_node:main',
+        ],
+    },
 )
 PYEOF
     echo "  ✓ resource/drone_sensors, setup.py, setup.cfg"

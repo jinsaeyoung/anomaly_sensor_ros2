@@ -116,7 +116,7 @@ if ! grep -q "source $WS/install/setup.bash" ~/.bashrc; then
 fi
 
 # 기존 alias 제거 후 재등록 (재실행 시 중복/구버전 방지)
-for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone; do
+for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log; do
     sed -i "/^alias ${a}=/d" ~/.bashrc
 done
 sed -i '/^# 드론 센서 편의 명령어$/d' ~/.bashrc
@@ -130,6 +130,8 @@ alias check_topics='ros2 topic list | grep -E "mavros|respeaker|thl100|wcm6800"'
 alias check_usb='ls -la /dev/serial/by-id/'
 alias record_drone='$WS/scripts/record_data.sh'
 alias analyze_drone='python3 $WS/scripts/analyze_bag.py'
+alias check_record='bash $WS/scripts/check_record.sh'
+alias onboard_log='tail -f \$HOME/anomaly_data/onboard.log'
 ALIAS
 
 source ~/.bashrc 2>/dev/null || true
@@ -148,6 +150,11 @@ echo "  check_topics             — 토픽 목록 확인"
 echo "  check_usb                — USB 장치 확인"
 echo "  record_drone 30          — 30초 데이터 녹화"
 echo "  analyze_drone <bag경로>  — 데이터 분석 (CSV + 그래프)"
+echo "  check_record             — 자동 녹화/서비스 상태 확인"
+echo "  onboard_log              — 온보드 실행 로그 실시간 확인"
+echo ""
+echo "  온보드 부팅 자동 실행 설정:"
+echo "    bash scripts/install_service.sh"
 echo ""
 echo "  FC 포트 변경 시:"
 echo "    ros2 launch drone_sensors drone_sensor_launch.py fcu_url:=/dev/ttyACM0:115200"

@@ -39,7 +39,7 @@ WCM6800 (UART 수신 스레드) →  /wcm6800/data, /raw       ┘
 | `respeaker` | ReSpeaker Mic Array v3.0 DoA/VAD/Audio/Energy |
 | `thl100_sensor` | OSTSen-THL100 온습도/조도 (UART 수신 + 1Hz 발행) |
 | `wcm6800_sensor` | Winson WCM6800 전류계 (UART 수신 + 10Hz 발행) |
-| `drone_sensors` | 통합 launch 패키지 |
+| `drone_sensors` | 통합 launch 패키지 + 자동 녹화 노드(`auto_record_node`) |
 
 ```
 anomaly_sensor_ros2/
@@ -50,9 +50,12 @@ anomaly_sensor_ros2/
 │   └── drone_sensors/
 │       └── launch/drone_sensor_launch.py
 ├── scripts/
-│   ├── record_data.sh         # rosbag 녹화
+│   ├── record_data.sh         # rosbag 수동 녹화
 │   ├── analyze_bag.py         # CSV 변환 + 10Hz 정렬 + 그래프
-│   └── check_time_sync.sh     # 시간 동기화 확인
+│   ├── check_time_sync.sh     # 시간 동기화 확인
+│   ├── start_onboard.sh       # 온보드 자동 실행 (systemd 호출)
+│   ├── install_service.sh     # 부팅 자동 실행 서비스 등록
+│   └── check_record.sh        # 자동 녹화 상태 점검
 ├── tests/
 │   ├── test_parsers.py        # 파서/좌표변환 단위 테스트
 │   └── virtual_uart_test.sh   # 가상 UART 통합 테스트
@@ -114,6 +117,8 @@ install.sh가 자동 처리하는 것:
 | `check_usb` | `ls -la /dev/serial/by-id/` | USB 시리얼 장치 확인 |
 | `record_drone` | `scripts/record_data.sh` | rosbag 녹화 |
 | `analyze_drone` | `python3 scripts/analyze_bag.py` | CSV + 그래프 생성 |
+| `check_record` | `scripts/check_record.sh` | 자동 녹화/서비스 상태 점검 |
+| `onboard_log` | `tail -f ~/anomaly_data/onboard.log` | 온보드 실행 로그 확인 |
 
 ```bash
 start_drone                                          # 전체 실행
@@ -231,20 +236,45 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0 | 누적 rx=1387 reconnect=1
 
 ---
 
-## 녹화 토픽 (21개)
+## 녹화 토픽 (37개)
 
-```
-MAVROS   /mavros/state, /imu/data, /imu/data_raw, /imu/mag
-         /local_position/pose, /local_position/velocity_local
-         /global_position/raw/fix, /global_position/raw/gps_vel
-         /vfr_hud, /battery, /rc/out
-         /vibration/raw/vibration
-         /setpoint_raw/target_attitude, /setpoint_raw/target_local
+### MAVROS
+| 분류 | 토픽 |
+|---|---|
+| IMU / 자세 / 진동 | `/mavros/imu/data`, `/imu/data_raw`, `/imu/mag`, `/vibration/raw/vibration` |
+| RC 입력 / 모터 출력 | `/mavros/rc/in`, `/rc/out` |
+| 제어 목표값 | `/mavros/setpoint_raw/target_attitude`, `/target_local` |
+| 로컬 위치·속도·가속도 | `/mavros/local_position/pose`, `/velocity_local`, `/accel` |
+| GPS / 고도 | `/mavros/global_position/raw/fix`, `/raw/gps_vel`, `/raw/satellites`, `/rel_alt`, `/mavros/altitude` |
+| 전력 / ESC | `/mavros/battery`, `/esc_telemetry/telemetry`, `/esc_status/status` |
+| 기체 상태 | `/mavros/vfr_hud`, `/state`, `/extended_state`, `/sys_status`, `/statustext/recv`, `/status_event` |
+| 항법 / 환경 | `/mavros/nav_controller_output/output`, `/wind_estimation` |
 
-THL100   /thl100/data, /thl100/raw
-WCM6800  /wcm6800/data, /wcm6800/raw
-Mic      /respeaker/doa, /respeaker/vad, /respeaker/energy
+### 센서 및 부가
+| 분류 | 토픽 |
+|---|---|
+| THL100 | `/thl100/data`, `/thl100/raw` |
+| WCM6800 | `/wcm6800/data`, `/wcm6800/raw` |
+| ReSpeaker | `/respeaker/doa`, `/vad`, `/energy` |
+| 라벨 / 메타 | `/anomaly/label`, `/test/metadata` |
+| 진단 | `/diagnostics` |
+
+`/respeaker/audio`(16kHz 원본)는 용량이 커서 기본 제외되어 있으며, `record_data.sh`에서 주석을 해제하면 포함됩니다.
+
+### 라벨 및 메타데이터 발행
+
+`/anomaly/label`과 `/test/metadata`는 이 패키지가 발행하지 않습니다. 실험 중 외부에서 발행하면 함께 녹화되어 학습 라벨로 활용할 수 있습니다.
+
+```bash
+# 이상 라벨 (정상 0 / 이상 1 등)
+ros2 topic pub -r 1 /anomaly/label std_msgs/Int32 "{data: 1}"
+
+# 실험 메타데이터
+ros2 topic pub --once /test/metadata std_msgs/String \
+  "{data: '{\"dronetype\":\"quad_x\",\"flightNo\":3,\"abnormal_type\":\"motor_degrade\",\"experiment_id\":\"EXP-2026-07-30-01\"}'}"
 ```
+
+분석 시 `Label` 컬럼은 merged CSV에 숫자로 들어가고, `Metadata`는 문자열이라 개별 CSV(`test_metadata.csv`)에만 보존됩니다.
 
 `record_data.sh`는 스크립트 위치로부터 워크스페이스를 자동 탐지하므로 어느 경로에 클론해도 동작합니다.
 
@@ -254,14 +284,14 @@ ANOMALY_DATA=/mnt/ssd/flight_logs record_drone 60    # 저장 경로 변경
 
 ---
 
-## 데이터 녹화
+## 데이터 녹화 (수동)
 
 ```bash
 record_drone 60     # 60초
 record_drone         # 무제한 (Ctrl+C)
 ```
 
-`~/anomaly_data/anomaly_data_YYYYMMDD_HHMMSS/` 에 저장됩니다.
+`~/anomaly_data/anomaly_data_YYYYMMDD_HHMMSS/` 에 저장됩니다. 자동 녹화 파일은 `flight_` 접두어로 구분됩니다.
 
 ---
 
@@ -363,11 +393,22 @@ MAVROS는 FC의 NED 데이터를 **ENU**로 변환해 발행합니다. 분석기
 | GPS | `GPS_Lat/Lon/Alt/Status`, `GPS_GroundSpeed/CourseAngle` |
 | 위치 | `LocalENU_*`, `LocalNED_*`, `Des_ENU_*` |
 | HUD | `VFR_GroundSpeed/Alt/Climb/Heading` |
-| FC 상태 | `State_Armed/Mode/Connected` |
-| 환경 | `THL100_Temp/Humi/Light/Seq` |
+| FC 상태 | `State_Armed/Mode/Connected`, `ExtState_Landed/Vtol`, `Sys_*` |
+| RC 입력 | `RCIN_C1~C8`, `RCIN_RSSI` |
+| 가속도(로컬) | `AccelENU_X/Y/Z` |
+| 고도 | `Alt_monotonic/amsl/local/relative/terrain`, `RelAlt` |
+| ESC | `ESCT1~8_{RPM,Volt,Curr,Temp,...}`, `ESCS1~8_*` |
+| 항법 | `Nav_Roll/Pitch/Bearing/WpDist/AltErr/XtrackErr` |
+| 환경(풍속) | `Wind_X/Y/Z` |
+| GPS 보조 | `GPS_Satellites` |
+| 환경(센서) | `THL100_Temp/Humi/Light/Seq` |
 | 전류 | `WCM_Current`, `WCM_Type` |
 | 마이크 | `MIC_DoA/VAD/Energy` |
+| 라벨 | `Label` |
+| 진단 | `Diag_WorstLevel` |
 | 품질 | `*_age_ms`, `*_stale` |
+
+문자열 컬럼(`StatusText`, `StatusEvent`, `Diag_Issues`, `Metadata`, `*_Raw`)은 merged CSV에서 제외하고 개별 CSV에만 보존합니다.
 
 타임존은 `scripts/analyze_bag.py` 상단 `LOCAL_TZ`로 변경 가능합니다.
 
@@ -447,5 +488,10 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0
 | stale 판정이 갑자기 오작동 | NTP 동기화로 시스템 시각 점프 | 경과시간을 `time.monotonic()` 기준으로 측정 (적용됨) |
 | `record_drone` 경로 오류 | 다른 경로에 클론 | 스크립트가 워크스페이스 자동 탐지 (적용됨) |
 | FC 연결 끊김 (`No such device`) | USB 분리/FC 재부팅 | USB 재연결 후 `stop_drone` → `start_drone` |
+| 시리얼 `Permission denied` | `dialout` 그룹이 현재 세션에 미적용 | 재로그인, 또는 `newgrp dialout` (해당 셸에만 적용) |
+| systemd 서비스에서 시리얼 권한 오류 | 서비스에 dialout 그룹 미부여 | 서비스 파일의 `SupplementaryGroups=dialout` 확인 (install_service.sh 반영됨) |
+| 부팅 직후 FC를 못 찾음 | USB 열거링이 ROS 실행보다 늦음 | `start_onboard.sh`가 최대 60초 대기 (`WAIT_USB_SEC`로 조정) |
+| 자동 녹화가 시작되지 않음 | `use_auto_record:=false` 또는 arm 미감지 | `check_record`로 노드 실행 및 `armed` 상태 확인 |
+| bag 파일이 손상됨 | SIGTERM/전원 차단으로 비정상 종료 | `KillSignal=SIGINT` 확인, `max_bag_duration`으로 분할 |
 | `record_drone` 실행 시 `AMENT_TRACE_SETUP_FILES: 바인딩 해제한 변수` | 스크립트의 `set -u`와 ROS `setup.bash`의 미정의 변수 참조 충돌 | ROS source 구간만 `set +u`로 감싸도록 수정 (적용됨) |
 | 분석 시 duration이 수 시간, merged CSV가 수십만 행 | GPS fix 없어 FC `header.stamp`가 부팅 경과시간 기준 → 시스템 시각과 큰 차이 | `MAX_STAMP_SKEW_SEC` 초과 시 `bag_time`으로 자동 대체 (적용됨). 실행 시 경고와 `stamp_source` 컬럼으로 확인 가능 |

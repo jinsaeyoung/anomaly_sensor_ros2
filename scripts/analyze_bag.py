@@ -61,11 +61,30 @@ STALE_LIMITS = {
     'LocalENU': 1.0,
     'VFR':     1.0,
     'Des':     1.0,
+    # 신규 그룹
+    'RCIN':    1.0,
+    'AccelENU': 1.0,
+    'RelAlt':  2.0,
+    'Alt':     2.0,
+    'ESCT':    2.0,
+    'ESCS':    2.0,
+    'ExtState': 5.0,
+    'Sys':     5.0,
+    'Status':  30.0,   # FC 상태 문자열은 간헐적 발생
+    'Nav':     2.0,
+    'Wind':    5.0,
+    'Label':   60.0,   # 라벨은 수동 발행이라 오래 유지
+    'Metadata': 3600.0,
+    'Diag':    10.0,
 }
 DEFAULT_STALE = 2.0
 
 # merged CSV에서 제외할 컬럼 (문자열 원시 패킷 등)
-EXCLUDE_FROM_MERGED = {'THL100_Raw', 'WCM_Raw', 'stamp_source'}
+EXCLUDE_FROM_MERGED = {
+    'THL100_Raw', 'WCM_Raw', 'stamp_source',
+    # 문자열/서술형 컬럼은 개별 CSV 에만 보존
+    'StatusText', 'StatusEvent', 'Diag_Issues', 'Metadata',
+}
 
 
 def quat_to_euler(x, y, z, w):
@@ -245,6 +264,117 @@ def parse_msg(topic, msg):
 
     elif topic == '/wcm6800/raw':
         row['WCM_Raw'] = msg.data
+
+    # ── RC 입력 ───────────────────────────────────────────────────────
+    elif topic == '/mavros/rc/in':
+        for i in range(min(8, len(msg.channels))):
+            row[f'RCIN_C{i+1}'] = msg.channels[i]
+        if hasattr(msg, 'rssi'):
+            row['RCIN_RSSI'] = msg.rssi
+
+    # ── 로컬 가속도 ───────────────────────────────────────────────────
+    elif topic == '/mavros/local_position/accel':
+        a = msg.accel.accel.linear
+        row.update({'AccelENU_X': a.x, 'AccelENU_Y': a.y, 'AccelENU_Z': a.z})
+
+    # ── GPS 위성 수 / 상대 고도 ───────────────────────────────────────
+    elif topic == '/mavros/global_position/raw/satellites':
+        row['GPS_Satellites'] = msg.data
+
+    elif topic == '/mavros/global_position/rel_alt':
+        row['RelAlt'] = msg.data
+
+    # ── 고도 (mavros_msgs/Altitude) ───────────────────────────────────
+    elif topic == '/mavros/altitude':
+        for f in ('monotonic', 'amsl', 'local', 'relative', 'terrain',
+                  'bottom_clearance'):
+            if hasattr(msg, f):
+                v = getattr(msg, f)
+                if not (isinstance(v, float) and math.isnan(v)):
+                    row[f'Alt_{f}'] = v
+
+    # ── ESC 텔레메트리 (배열 → 채널별 전개) ───────────────────────────
+    elif topic == '/mavros/esc_telemetry/telemetry':
+        arr = getattr(msg, 'esc_telemetry', [])
+        for i, e in enumerate(arr[:8]):
+            for f, key in (('temperature', 'Temp'), ('voltage', 'Volt'),
+                           ('current', 'Curr'), ('totalcurrent', 'CurrTot'),
+                           ('rpm', 'RPM'), ('count', 'Count')):
+                if hasattr(e, f):
+                    row[f'ESCT{i+1}_{key}'] = getattr(e, f)
+
+    elif topic == '/mavros/esc_status/status':
+        arr = getattr(msg, 'esc_status', [])
+        for i, e in enumerate(arr[:8]):
+            for f, key in (('rpm', 'RPM'), ('voltage', 'Volt'),
+                           ('current', 'Curr')):
+                if hasattr(e, f):
+                    row[f'ESCS{i+1}_{key}'] = getattr(e, f)
+
+    # ── 확장 상태 (착륙/VTOL) ─────────────────────────────────────────
+    elif topic == '/mavros/extended_state':
+        if hasattr(msg, 'landed_state'):
+            row['ExtState_Landed'] = msg.landed_state
+        if hasattr(msg, 'vtol_state'):
+            row['ExtState_Vtol'] = msg.vtol_state
+
+    # ── 시스템 상태 ───────────────────────────────────────────────────
+    elif topic == '/mavros/sys_status':
+        for f, key in (('voltage_battery', 'Volt'), ('current_battery', 'Curr'),
+                       ('battery_remaining', 'BattPct'),
+                       ('drop_rate_comm', 'DropRate'), ('errors_comm', 'ErrComm'),
+                       ('load', 'Load')):
+            if hasattr(msg, f):
+                row[f'Sys_{key}'] = getattr(msg, f)
+
+    # ── FC 상태 메시지 (문자열) ───────────────────────────────────────
+    elif topic == '/mavros/statustext/recv':
+        if hasattr(msg, 'text'):
+            row['StatusText'] = msg.text
+        if hasattr(msg, 'severity'):
+            row['StatusSeverity'] = msg.severity
+
+    elif topic == '/mavros/status_event':
+        row['StatusEvent'] = str(getattr(msg, 'data', msg))[:120]
+
+    # ── 항법 컨트롤러 출력 ────────────────────────────────────────────
+    elif topic == '/mavros/nav_controller_output/output':
+        for f, key in (('nav_roll', 'Roll'), ('nav_pitch', 'Pitch'),
+                       ('nav_bearing', 'Bearing'), ('target_bearing', 'TgtBearing'),
+                       ('wp_dist', 'WpDist'), ('alt_error', 'AltErr'),
+                       ('aspd_error', 'AspdErr'), ('xtrack_error', 'XtrackErr')):
+            if hasattr(msg, f):
+                row[f'Nav_{key}'] = getattr(msg, f)
+
+    # ── 풍속 추정 ─────────────────────────────────────────────────────
+    elif topic == '/mavros/wind_estimation':
+        w = msg.twist.twist.linear if hasattr(msg.twist, 'twist') else msg.twist.linear
+        row.update({'Wind_X': w.x, 'Wind_Y': w.y, 'Wind_Z': w.z})
+
+    # ── 이상 라벨 / 실험 메타데이터 (외부 발행, 타입 유연 처리) ────────
+    elif topic == '/anomaly/label':
+        v = getattr(msg, 'data', None)
+        if v is not None:
+            row['Label'] = v if isinstance(v, (int, float)) else str(v)[:120]
+
+    elif topic == '/test/metadata':
+        v = getattr(msg, 'data', None)
+        if v is not None:
+            row['Metadata'] = str(v)[:200]
+
+    # ── 시스템 진단 (요약만) ──────────────────────────────────────────
+    elif topic == '/diagnostics':
+        arr = getattr(msg, 'status', [])
+        worst = 0
+        names = []
+        for s in arr:
+            lvl = getattr(s, 'level', 0)
+            worst = max(worst, lvl)
+            if lvl > 0:
+                names.append(getattr(s, 'name', '?'))
+        row['Diag_WorstLevel'] = worst
+        if names:
+            row['Diag_Issues'] = ','.join(names)[:150]
 
     # ── 마이크 ────────────────────────────────────────────────────────
     elif topic == '/respeaker/doa':
@@ -479,6 +609,9 @@ def plot_key_topics(dfs, output_prefix):
         ('/thl100/data',                    'THL100_Temp', 'Temp (C)'),
         ('/wcm6800/data',                   'WCM_Current', 'Current (A)'),
         ('/respeaker/energy',               'MIC_Energy',  'MIC Energy (RMS)'),
+        ('/mavros/altitude',                'Alt_relative','Rel Alt (m)'),
+        ('/mavros/esc_telemetry/telemetry', 'ESCT1_RPM',   'ESC1 RPM'),
+        ('/anomaly/label',                  'Label',       'Anomaly Label'),
     ]
 
     plots = []
