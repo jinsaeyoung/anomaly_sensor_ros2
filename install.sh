@@ -116,7 +116,7 @@ if ! grep -q "source $WS/install/setup.bash" ~/.bashrc; then
 fi
 
 # 기존 alias 제거 후 재등록 (재실행 시 중복/구버전 방지)
-for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log; do
+for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log service_status setup_fc scan_baud; do
     sed -i "/^alias ${a}=/d" ~/.bashrc
 done
 sed -i '/^# 드론 센서 편의 명령어$/d' ~/.bashrc
@@ -124,11 +124,14 @@ sed -i '/^# 드론 센서 편의 명령어$/d' ~/.bashrc
 cat >> ~/.bashrc << ALIAS
 
 # 드론 센서 편의 명령어
-alias start_drone='$WS/scripts/check_time_sync.sh; pkill -f mavros_node 2>/dev/null; sleep 1; ros2 launch drone_sensors drone_sensor_launch.py'
+alias start_drone='$WS/scripts/guard_service.sh && $WS/scripts/check_time_sync.sh; pkill -f mavros_node 2>/dev/null; sleep 1; ros2 launch drone_sensors drone_sensor_launch.py'
 alias stop_drone='pkill -f mavros_node 2>/dev/null; pkill -f drone_sensor_launch 2>/dev/null'
 alias check_topics='ros2 topic list | grep -E "mavros|respeaker|thl100|wcm6800"'
 alias check_usb='ls -la /dev/serial/by-id/'
 alias record_drone='$WS/scripts/record_data.sh'
+alias service_status='bash $WS/scripts/install_service.sh status'
+alias setup_fc='bash $WS/scripts/setup_fc_streams.sh'
+alias scan_baud='bash $WS/scripts/scan_fcu_baud.sh'
 alias analyze_drone='python3 $WS/scripts/analyze_bag.py'
 alias check_record='bash $WS/scripts/check_record.sh'
 alias onboard_log='tail -f \$HOME/anomaly_data/onboard.log'
@@ -153,8 +156,15 @@ echo "  analyze_drone <bag경로>  — 데이터 분석 (CSV + 그래프)"
 echo "  check_record             — 자동 녹화/서비스 상태 확인"
 echo "  onboard_log              — 온보드 실행 로그 실시간 확인"
 echo ""
-echo "  온보드 부팅 자동 실행 설정:"
-echo "    bash scripts/install_service.sh"
+echo "  service_status           — 부팅 자동실행 모드 확인"
+echo "  setup_fc [0|1|2]         — FC 스트림(SR) 파라미터 설정 (기본 SR2/TELEM2)"
+echo "  setup_fc check           — 현재 SR/SERIAL 파라미터 조회"
+echo "  scan_baud <포트>         — FC baud rate 탐색"
+echo ""
+echo "  온보드 자동 실행:"
+echo "    bash scripts/install_service.sh          # 등록만 (개발 모드)"
+echo "    bash scripts/install_service.sh enable   # 부팅 자동실행 ON (운용)"
+echo "    bash scripts/install_service.sh disable  # 개발 모드로 복귀"
 echo ""
 echo "  FC 포트 변경 시:"
 echo "    ros2 launch drone_sensors drone_sensor_launch.py fcu_url:=/dev/ttyACM0:115200"

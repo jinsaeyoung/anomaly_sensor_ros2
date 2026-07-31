@@ -29,13 +29,23 @@ from ament_index_python.packages import get_package_share_directory
 # ══════════════════════════════════════════════════════════════════════════════
 # 기본 장치 경로
 #   장치 ID 확인: ls -la /dev/serial/by-id/
-#   baud rate — USB: 115200 / TELEM2: 57600
 #   재빌드 없이 launch 인자로 덮어쓸 수 있습니다.
+#
+#   FC 연결 방식별 baud (FC의 SERIALn_BAUD 와 일치해야 함)
+#     USB 직결 (SERIAL0) : 115200   → SR0_* 파라미터 사용
+#     TELEM1   (SERIAL1) : 57600    → SR1_* 파라미터 사용
+#     TELEM2   (SERIAL2) : 921600   → SR2_* 파라미터 사용  ← 현재 구성
+#
+#   baud 를 모르면 scripts/scan_fcu_baud.sh 로 탐색할 수 있습니다.
 # ══════════════════════════════════════════════════════════════════════════════
-DEFAULT_FCU_URL = (
-    '/dev/serial/by-id/'
-    'usb-Hex_ProfiCNC_CubeOrange_310041000551303139333430-if00:115200'
-)
+# [현재] TELEM2 + USB-TTL 젠더(CH340, VID 1a86) — 실기체 운용 구성
+DEFAULT_FCU_URL = '/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0:921600'
+
+# [대안] CubeOrange USB 직결 (개발·점검용)
+# DEFAULT_FCU_URL = (
+#     '/dev/serial/by-id/'
+#     'usb-Hex_ProfiCNC_CubeOrange_310041000551303139333430-if00:115200'
+# )
 DEFAULT_THL100_PORT = (
     '/dev/serial/by-id/'
     'usb-Prolific_Technology_Inc._USB-Serial_Controller_D-if00-port0'
