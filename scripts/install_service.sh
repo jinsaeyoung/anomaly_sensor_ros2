@@ -24,10 +24,10 @@ SAVE_DIR="$RUN_HOME/anomaly_data"
 
 # ── FC 연결 설정 ──────────────────────────────────────────────────────
 # TELEM2 + USB-TTL 젠더(CH340) 기본. 환경변수로 덮어쓸 수 있습니다.
-#   FCU_URL=/dev/ttyACM0:115200 FC_SERIAL_PORT=0 bash scripts/install_service.sh
+#   FCU_URL=/dev/ttyACM0:115200 bash scripts/install_service.sh
 FCU_URL="${FCU_URL:-/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0:921600}"
-FC_SERIAL_PORT="${FC_SERIAL_PORT:-2}"      # 0=USB, 1=TELEM1, 2=TELEM2
-AUTO_SETUP_SR="${AUTO_SETUP_SR:-0}"
+WAIT_USB_SEC="${WAIT_USB_SEC:-60}"       # FC 장치 대기 최대 시간
+FC_STABLE_SEC="${FC_STABLE_SEC:-6}"      # FC 장치 안정화 확인 시간
 
 MODE="${1:-install}"
 
@@ -87,7 +87,7 @@ echo " 실행 사용자:  $RUN_USER"
 echo " 워크스페이스: $WS"
 echo " 저장 경로:    $SAVE_DIR"
 echo " FC 연결:      $FCU_URL"
-echo " SR 파라미터:  SR${FC_SERIAL_PORT}_*"
+echo " FC 대기:      최대 ${WAIT_USB_SEC}초 / 안정화 ${FC_STABLE_SEC}초"
 echo "=========================================="
 
 # ── 사전 확인 ─────────────────────────────────────────────────────────
@@ -129,8 +129,8 @@ Environment="PYTHONUNBUFFERED=1"
 
 # FC 연결 설정
 Environment="FCU_URL=$FCU_URL"
-Environment="FC_SERIAL_PORT=$FC_SERIAL_PORT"
-Environment="AUTO_SETUP_SR=$AUTO_SETUP_SR"
+Environment="WAIT_USB_SEC=$WAIT_USB_SEC"
+Environment="FC_STABLE_SEC=$FC_STABLE_SEC"
 
 # 부팅 직후 USB 열거링 대기
 ExecStartPre=/bin/sleep 15

@@ -59,10 +59,13 @@ DEFAULT_TOPICS = [
     '/mavros/global_position/raw/fix',
     '/mavros/global_position/raw/gps_vel',
     '/mavros/global_position/raw/satellites',
+    '/mavros/global_position/global',
     '/mavros/global_position/rel_alt',
+    '/mavros/gpsstatus/gps1/raw',
     '/mavros/altitude',
     # MAVROS: 전력 / ESC
     '/mavros/battery',
+    '/mavros/battery2',
     '/mavros/esc_telemetry/telemetry',
     '/mavros/esc_status/status',
     # MAVROS: 기체 상태
@@ -72,6 +75,7 @@ DEFAULT_TOPICS = [
     '/mavros/sys_status',
     '/mavros/statustext/recv',
     '/mavros/status_event',
+    '/mavros/timesync_status',
     # MAVROS: 항법 / 환경
     '/mavros/nav_controller_output/output',
     '/mavros/wind_estimation',

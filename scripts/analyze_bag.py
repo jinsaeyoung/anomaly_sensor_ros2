@@ -87,6 +87,20 @@ EXCLUDE_FROM_MERGED = {
 }
 
 
+def _to_int(v, default=0):
+    """
+    ROS 메시지의 byte / uint8 / int8 필드를 파이썬 int 로 변환합니다.
+    rclpy 는 byte 타입을 b'\x00' 형태의 bytes 로 전달하므로
+    정수 비교·연산 전에 반드시 변환이 필요합니다.
+    """
+    if isinstance(v, (bytes, bytearray)):
+        return v[0] if len(v) else default
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def quat_to_euler(x, y, z, w):
     """쿼터니언 → 오일러(deg)"""
     roll  = math.degrees(math.atan2(2*(w*x + y*z), 1 - 2*(x*x + y*y)))
@@ -206,7 +220,7 @@ def parse_msg(topic, msg):
         row.update({'GPS_Lat': msg.latitude,
                     'GPS_Lon': msg.longitude,
                     'GPS_Alt': msg.altitude,
-                    'GPS_Status': msg.status.status})
+                    'GPS_Status': _to_int(msg.status.status)})
 
     elif topic == '/mavros/global_position/raw/gps_vel':
         # MAVROS twist는 ENU 기준 (x=East, y=North, z=Up)
@@ -265,6 +279,42 @@ def parse_msg(topic, msg):
     elif topic == '/wcm6800/raw':
         row['WCM_Raw'] = msg.data
 
+    # ── 보조 배터리 ───────────────────────────────────────────────────
+    elif topic == '/mavros/battery2':
+        row.update({'BAT2_Volt': msg.voltage, 'BAT2_Curr': msg.current})
+        if hasattr(msg, 'charge') and not math.isnan(msg.charge) and msg.charge > 0:
+            row['BAT2_CurrTot'] = msg.charge
+        if hasattr(msg, 'percentage') and not math.isnan(msg.percentage):
+            row['BAT2_Percent'] = msg.percentage
+
+    # ── GPS 상세 상태 (위성 수, DOP, fix type) ────────────────────────
+    elif topic == '/mavros/gpsstatus/gps1/raw':
+        for f, key in (('satellites_visible', 'Sats'), ('fix_type', 'FixType'),
+                       ('eph', 'EPH'), ('epv', 'EPV'),
+                       ('h_acc', 'HAcc'), ('v_acc', 'VAcc'),
+                       ('vel_acc', 'VelAcc'), ('hdg_acc', 'HdgAcc'),
+                       ('dgps_numch', 'DgpsCh'), ('vel', 'Vel'),
+                       ('cog', 'COG'), ('alt', 'Alt')):
+            if hasattr(msg, f):
+                row[f'GPSRaw_{key}'] = _to_int(getattr(msg, f)) \
+                    if key in ('Sats', 'FixType', 'DgpsCh') else getattr(msg, f)
+
+    # ── EKF 융합 글로벌 위치 (raw/fix 는 GPS 원본) ────────────────────
+    elif topic == '/mavros/global_position/global':
+        row.update({'GlobalPos_Lat': msg.latitude,
+                    'GlobalPos_Lon': msg.longitude,
+                    'GlobalPos_Alt': msg.altitude,
+                    'GlobalPos_Status': _to_int(msg.status.status)})
+
+    # ── FC-PC 시간 동기화 상태 ────────────────────────────────────────
+    elif topic == '/mavros/timesync_status':
+        for f, key in (('remote_timestamp_ns', 'RemoteNs'),
+                       ('observed_offset_ns', 'ObsOffsetNs'),
+                       ('estimated_offset_ns', 'EstOffsetNs'),
+                       ('round_trip_time_ms', 'RTTms')):
+            if hasattr(msg, f):
+                row[f'TimeSync_{key}'] = getattr(msg, f)
+
     # ── RC 입력 ───────────────────────────────────────────────────────
     elif topic == '/mavros/rc/in':
         for i in range(min(8, len(msg.channels))):
@@ -314,9 +364,9 @@ def parse_msg(topic, msg):
     # ── 확장 상태 (착륙/VTOL) ─────────────────────────────────────────
     elif topic == '/mavros/extended_state':
         if hasattr(msg, 'landed_state'):
-            row['ExtState_Landed'] = msg.landed_state
+            row['ExtState_Landed'] = _to_int(msg.landed_state)
         if hasattr(msg, 'vtol_state'):
-            row['ExtState_Vtol'] = msg.vtol_state
+            row['ExtState_Vtol'] = _to_int(msg.vtol_state)
 
     # ── 시스템 상태 ───────────────────────────────────────────────────
     elif topic == '/mavros/sys_status':
@@ -330,9 +380,9 @@ def parse_msg(topic, msg):
     # ── FC 상태 메시지 (문자열) ───────────────────────────────────────
     elif topic == '/mavros/statustext/recv':
         if hasattr(msg, 'text'):
-            row['StatusText'] = msg.text
+            row['StatusText'] = str(msg.text)
         if hasattr(msg, 'severity'):
-            row['StatusSeverity'] = msg.severity
+            row['StatusSeverity'] = _to_int(msg.severity)
 
     elif topic == '/mavros/status_event':
         row['StatusEvent'] = str(getattr(msg, 'data', msg))[:120]
@@ -368,10 +418,12 @@ def parse_msg(topic, msg):
         worst = 0
         names = []
         for s in arr:
-            lvl = getattr(s, 'level', 0)
-            worst = max(worst, lvl)
+            # DiagnosticStatus.level 은 byte 타입 (b'\x00' 형태)
+            lvl = _to_int(getattr(s, 'level', 0))
+            if lvl > worst:
+                worst = lvl
             if lvl > 0:
-                names.append(getattr(s, 'name', '?'))
+                names.append(str(getattr(s, 'name', '?')))
         row['Diag_WorstLevel'] = worst
         if names:
             row['Diag_Issues'] = ','.join(names)[:150]
@@ -404,6 +456,7 @@ def read_bag(bag_path):
 
     data = defaultdict(list)
     skew_stat = defaultdict(int)   # 토픽별 skew fallback 횟수
+    parse_err = {}                 # 토픽별 파싱 오류 횟수
     cursor.execute("SELECT topic_id, timestamp, data FROM messages ORDER BY timestamp")
 
     for topic_id, bag_ts, raw in cursor.fetchall():
@@ -414,7 +467,14 @@ def read_bag(bag_path):
         except Exception:
             continue
 
-        row = parse_msg(topic_name, msg)
+        # 특정 토픽 파싱 실패가 전체 분석을 중단시키지 않도록 방어
+        try:
+            row = parse_msg(topic_name, msg)
+        except Exception as e:
+            parse_err[topic_name] = parse_err.get(topic_name, 0) + 1
+            if parse_err[topic_name] == 1:
+                print(f'  [경고] {topic_name} 파싱 오류 (이후 동일 오류는 생략): {e}')
+            continue
         if not row:
             continue
 
@@ -438,6 +498,11 @@ def read_bag(bag_path):
             print(f'  {t:46s} {n}/{total} 건')
         print('  (FC의 GPS fix 없음 → ArduPilot 부팅 후 경과시간을 '
               'timestamp로 사용하는 경우 발생)')
+
+    if parse_err:
+        print('\n[경고] 파싱에 실패한 토픽 (해당 메시지는 건너뜀):')
+        for t, n in sorted(parse_err.items(), key=lambda x: -x[1]):
+            print(f'  {t:46s} {n}건')
 
     all_src = [r['source_time_ns'] for rows in data.values() for r in rows]
     if not all_src:
@@ -612,6 +677,8 @@ def plot_key_topics(dfs, output_prefix):
         ('/mavros/altitude',                'Alt_relative','Rel Alt (m)'),
         ('/mavros/esc_telemetry/telemetry', 'ESCT1_RPM',   'ESC1 RPM'),
         ('/anomaly/label',                  'Label',       'Anomaly Label'),
+        ('/mavros/gpsstatus/gps1/raw',      'GPSRaw_Sats', 'GPS Satellites'),
+        ('/mavros/timesync_status',         'TimeSync_RTTms', 'Timesync RTT (ms)'),
     ]
 
     plots = []

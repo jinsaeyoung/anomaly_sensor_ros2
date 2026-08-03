@@ -12,6 +12,17 @@ SAVE_DIR="${ANOMALY_DATA:-$HOME/anomaly_data}"
 source /opt/ros/humble/setup.bash 2>/dev/null
 [ -f "$WS/install/setup.bash" ] && source "$WS/install/setup.bash"
 
+# ros2 daemon 이 죽으면 노드가 0개로 보이므로 먼저 확인/복구
+if [ "$(systemctl is-active anomaly-sensor 2>/dev/null)" = "active" ]; then
+    if [ "$(timeout 5 ros2 node list 2>/dev/null | wc -l)" = "0" ]; then
+        ros2 daemon stop  >/dev/null 2>&1
+        ros2 daemon start >/dev/null 2>&1
+        sleep 3
+        echo "(ros2 daemon 재시작됨 — 데이터 수집에는 영향 없음)"
+        echo ""
+    fi
+fi
+
 echo "=========================================="
 echo " 서비스 상태"
 echo "=========================================="

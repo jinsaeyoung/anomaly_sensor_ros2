@@ -45,6 +45,12 @@ export PATH=$HOME/.local/bin:$PATH
 if ! grep -q 'local/bin' ~/.bashrc; then
     echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
 fi
+
+# systemd 서비스와 동일한 DDS 도메인 사용 (미설정 시 토픽이 안 보임)
+if ! grep -q 'ROS_DOMAIN_ID' ~/.bashrc; then
+    echo 'export ROS_DOMAIN_ID=0' >> ~/.bashrc
+fi
+export ROS_DOMAIN_ID=0
 echo "✅ pip 업그레이드 완료"
 
 # ── 4. Python 의존성 설치 ────────────────────────────────────────────────
@@ -68,6 +74,12 @@ echo "✅ GeographicLib 설치 완료"
 echo "[6/8] udev 규칙 설정..."
 echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2886", MODE="0666"' | \
     sudo tee /etc/udev/rules.d/60-respeaker.rules > /dev/null
+
+# CH340(FC 젠더)이 brltty 에 가로채이지 않도록 제외 규칙 추가
+sudo tee /etc/udev/rules.d/85-anomaly-serial.rules > /dev/null << 'UDEVEOF'
+# CH340 (FC USB-TTL 젠더) — brltty 가 점자 장치로 오인하지 않도록 제외
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", ENV{BRLTTY_BRAILLE_DRIVER}="", ENV{BRLTTY_NO_DRIVER}="1"
+UDEVEOF
 sudo usermod -aG dialout $USER
 sudo udevadm control --reload-rules
 sudo udevadm trigger
@@ -116,7 +128,7 @@ if ! grep -q "source $WS/install/setup.bash" ~/.bashrc; then
 fi
 
 # 기존 alias 제거 후 재등록 (재실행 시 중복/구버전 방지)
-for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log service_status setup_fc scan_baud; do
+for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log service_status watch_fcu onboard_env monitor_drone setup_fc scan_baud; do
     sed -i "/^alias ${a}=/d" ~/.bashrc
 done
 sed -i '/^# 드론 센서 편의 명령어$/d' ~/.bashrc
@@ -130,8 +142,9 @@ alias check_topics='ros2 topic list | grep -E "mavros|respeaker|thl100|wcm6800"'
 alias check_usb='ls -la /dev/serial/by-id/'
 alias record_drone='$WS/scripts/record_data.sh'
 alias service_status='bash $WS/scripts/install_service.sh status'
-alias setup_fc='bash $WS/scripts/setup_fc_streams.sh'
-alias scan_baud='bash $WS/scripts/scan_fcu_baud.sh'
+alias watch_fcu='bash $WS/scripts/watch_fcu.sh'
+alias onboard_env='bash $WS/scripts/setup_onboard_env.sh'
+alias monitor_drone='bash $WS/scripts/monitor_drone.sh'
 alias analyze_drone='python3 $WS/scripts/analyze_bag.py'
 alias check_record='bash $WS/scripts/check_record.sh'
 alias onboard_log='tail -f \$HOME/anomaly_data/onboard.log'
@@ -157,9 +170,12 @@ echo "  check_record             — 자동 녹화/서비스 상태 확인"
 echo "  onboard_log              — 온보드 실행 로그 실시간 확인"
 echo ""
 echo "  service_status           — 부팅 자동실행 모드 확인"
-echo "  setup_fc [0|1|2]         — FC 스트림(SR) 파라미터 설정 (기본 SR2/TELEM2)"
-echo "  setup_fc check           — 현재 SR/SERIAL 파라미터 조회"
-echo "  scan_baud <포트>         — FC baud rate 탐색"
+echo "  watch_fcu --once         — FC 연결 상태 점검"
+echo "  onboard_env check        — 온보드 환경 상태 확인"
+echo "  monitor_drone            — 실시간 모니터 (arm/녹화 상태)"
+echo ""
+echo "  ⚠️  온보드(무인) 운용 시 먼저 실행하세요:"
+echo "    bash scripts/setup_onboard_env.sh        # brltty 제거, sudo, 도메인 등"
 echo ""
 echo "  온보드 자동 실행:"
 echo "    bash scripts/install_service.sh          # 등록만 (개발 모드)"

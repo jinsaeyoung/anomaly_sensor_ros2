@@ -36,7 +36,7 @@ from ament_index_python.packages import get_package_share_directory
 #     TELEM1   (SERIAL1) : 57600    → SR1_* 파라미터 사용
 #     TELEM2   (SERIAL2) : 921600   → SR2_* 파라미터 사용  ← 현재 구성
 #
-#   baud 를 모르면 scripts/scan_fcu_baud.sh 로 탐색할 수 있습니다.
+#   baud 를 모르면 README 의 'baud rate 확인' 절차를 참고하세요.
 # ══════════════════════════════════════════════════════════════════════════════
 # [현재] TELEM2 + USB-TTL 젠더(CH340, VID 1a86) — 실기체 운용 구성
 DEFAULT_FCU_URL = '/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0:921600'
