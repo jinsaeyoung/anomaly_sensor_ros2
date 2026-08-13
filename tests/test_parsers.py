@@ -207,6 +207,123 @@ class TestCoordinateConversion(unittest.TestCase):
         self.assertAlmostEqual(gps_course(-1.0, 0.0), 270.0, places=3)
 
 
+class TestSplitBagOrdering(unittest.TestCase):
+    """
+    rosbag2 는 max_bag_duration 도달 시 파일을 분할합니다.
+    분할 파일을 사전순으로 정렬하면 _10.db3 가 _2.db3 앞에 와서
+    시계열 순서가 깨지므로 숫자 접미사 기준 정렬이 필요합니다.
+    """
+
+    @staticmethod
+    def _seq(name):
+        import re
+        m = re.search(r'_(\d+)\.db3$', name)
+        return int(m.group(1)) if m else 0
+
+    def test_numeric_ordering(self):
+        files = ['f_0.db3', 'f_10.db3', 'f_1.db3', 'f_11.db3', 'f_2.db3', 'f_9.db3']
+        got = sorted(files, key=self._seq)
+        want = ['f_0.db3', 'f_1.db3', 'f_2.db3', 'f_9.db3', 'f_10.db3', 'f_11.db3']
+        self.assertEqual(got, want)
+
+    def test_lexical_ordering_is_wrong(self):
+        """사전순 정렬이 실제로 순서를 깨뜨리는지 확인"""
+        files = ['f_0.db3', 'f_10.db3', 'f_2.db3']
+        self.assertNotEqual(sorted(files), sorted(files, key=self._seq))
+
+    def test_no_suffix(self):
+        self.assertEqual(self._seq('flight.db3'), 0)
+
+
+class TestAudioSummary(unittest.TestCase):
+    """ReSpeaker 원본 PCM 요약 통계 계산 검증"""
+
+    CHANNELS = 6
+
+    def test_channel_extraction(self):
+        import numpy as np
+        # 6채널 interleaved: [c0,c1,...,c5, c0,c1,...]
+        n_frames = 4
+        pcm = np.arange(n_frames * self.CHANNELS, dtype=np.int16)
+        ch0 = pcm[::self.CHANNELS]
+        self.assertEqual(list(ch0), [0, 6, 12, 18])
+        self.assertEqual(ch0.size, n_frames)
+
+    def test_rms(self):
+        import numpy as np
+        pcm = np.array([3, 0, 0, 0, 0, 0,
+                        4, 0, 0, 0, 0, 0], dtype=np.int16)
+        ch0 = pcm[::self.CHANNELS].astype(np.float32)
+        rms = float(np.sqrt(np.mean(ch0 ** 2)))
+        self.assertAlmostEqual(rms, 3.5355, places=3)   # sqrt((9+16)/2)
+
+    def test_clip_detection(self):
+        import numpy as np
+        pcm = np.zeros(6 * 4, dtype=np.int16)
+        pcm[0]  = 32700     # ch0 프레임0 — 클리핑
+        pcm[6]  = 100       # ch0 프레임1
+        pcm[12] = 32500     # ch0 프레임2 — 클리핑
+        pcm[18] = 200       # ch0 프레임3
+        ch0 = pcm[::6].astype(np.float32)
+        clip_pct = float(np.mean(np.abs(ch0) > 32000) * 100.0)
+        self.assertAlmostEqual(clip_pct, 50.0)
+
+
+class TestTrackingError(unittest.TestCase):
+    """목표 대비 실제의 추종 오차 계산 검증"""
+
+    @staticmethod
+    def _wrap180(v):
+        return ((v + 180.0) % 360.0) - 180.0
+
+    def test_yaw_wrap_positive(self):
+        # 359° 목표, 1° 실제 → 단순 차는 358 이지만 실제 오차는 -2
+        self.assertAlmostEqual(self._wrap180(359.0 - 1.0), -2.0)
+
+    def test_yaw_wrap_negative(self):
+        self.assertAlmostEqual(self._wrap180(-190.0), 170.0)
+
+    def test_yaw_boundary(self):
+        self.assertAlmostEqual(self._wrap180(180.0), -180.0)
+
+    def test_yaw_no_wrap(self):
+        self.assertAlmostEqual(self._wrap180(5.0), 5.0)
+
+    def test_attitude_error_magnitude(self):
+        import math
+        err_roll, err_pitch = 3.0, -4.0
+        mag = math.sqrt(err_roll ** 2 + err_pitch ** 2)
+        self.assertAlmostEqual(mag, 5.0)
+
+
+class TestTypeMask(unittest.TestCase):
+    """
+    setpoint 메시지의 type_mask 해석 검증
+    bit 가 set 되면 해당 필드를 무시하라는 의미이므로,
+    유효 판정은 반전됩니다.
+    """
+
+    def test_attitude_valid(self):
+        # bit7(0x80) = attitude ignore
+        self.assertEqual(int(not (0x00 & 0x80)), 1)   # 유효
+        self.assertEqual(int(not (0x80 & 0x80)), 0)   # 무시
+
+    def test_body_rate_valid(self):
+        # bit0~2 = body rate ignore
+        self.assertEqual(int(not (0x00 & 0x07)), 1)
+        self.assertEqual(int(not (0x07 & 0x07)), 0)
+
+    def test_position_valid(self):
+        # bit0~2 = position ignore
+        self.assertEqual(int(not (0x00 & 0x07)), 1)
+        self.assertEqual(int(not (0x07 & 0x07)), 0)
+
+    def test_velocity_valid(self):
+        # bit3~5 = velocity ignore
+        self.assertEqual(int(not (0x00 & 0x38)), 1)
+        self.assertEqual(int(not (0x38 & 0x38)), 0)
+
+
 class TestStaleLogic(unittest.TestCase):
     """age 기반 stale 판정 로직 검증"""
 

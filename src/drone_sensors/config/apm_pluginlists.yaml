@@ -1,0 +1,30 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# MAVROS 플러그인 목록 — anomaly_sensor_ros2 전용
+#
+# mavros 기본 설정(/opt/ros/humble/share/mavros/launch/apm_pluginlists.yaml)은
+# 다음 플러그인을 denylist 에 두어 토픽이 생성되지 않습니다.
+#   - vibration   → /mavros/vibration/raw/vibration  (이상탐지 핵심 지표)
+#   - altitude    → /mavros/altitude                 (고도 상세)
+#
+# 이 파일은 두 플러그인을 활성화하고 나머지 불필요한 것만 차단합니다.
+# 시스템 파일을 직접 수정하면 mavros 업데이트 시 되돌아가므로
+# 패키지 안에 두고 launch 에서 지정합니다.
+# ══════════════════════════════════════════════════════════════════════════════
+/**:
+  ros__parameters:
+    plugin_denylist:
+      # ── common: 사용하지 않는 제어/전송 기능 ──────────────────────
+      - actuator_control      # 직접 액추에이터 제어 (수집 목적에 불필요)
+      - ftp                   # 파일 전송
+      - hil                   # Hardware In the Loop
+
+      # ── extras: 미장착 센서 / 미사용 기능 ────────────────────────
+      - debug_value           # 디버그 값
+      - image_pub             # 카메라 이미지 전송
+      - px4flow               # PX4Flow 광류 센서 (미장착)
+      - vision_speed_estimate # 외부 비전 속도 입력
+      - wheel_odometry        # 지상차량용 휠 오도메트리
+
+      # ── 활성화한 항목 (기본값에서 제외) ──────────────────────────
+      # - altitude            → /mavros/altitude 사용
+      # - vibration           → /mavros/vibration/raw/vibration 사용

@@ -128,7 +128,7 @@ if ! grep -q "source $WS/install/setup.bash" ~/.bashrc; then
 fi
 
 # 기존 alias 제거 후 재등록 (재실행 시 중복/구버전 방지)
-for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log service_status watch_fcu onboard_env monitor_drone setup_fc scan_baud; do
+for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log service_status watch_fcu onboard_env monitor_drone extract_audio setup_fc scan_baud; do
     sed -i "/^alias ${a}=/d" ~/.bashrc
 done
 sed -i '/^# 드론 센서 편의 명령어$/d' ~/.bashrc
@@ -145,6 +145,7 @@ alias service_status='bash $WS/scripts/install_service.sh status'
 alias watch_fcu='bash $WS/scripts/watch_fcu.sh'
 alias onboard_env='bash $WS/scripts/setup_onboard_env.sh'
 alias monitor_drone='bash $WS/scripts/monitor_drone.sh'
+alias extract_audio='python3 $WS/scripts/extract_audio.py'
 alias analyze_drone='python3 $WS/scripts/analyze_bag.py'
 alias check_record='bash $WS/scripts/check_record.sh'
 alias onboard_log='tail -f \$HOME/anomaly_data/onboard.log'
@@ -173,6 +174,7 @@ echo "  service_status           — 부팅 자동실행 모드 확인"
 echo "  watch_fcu --once         — FC 연결 상태 점검"
 echo "  onboard_env check        — 온보드 환경 상태 확인"
 echo "  monitor_drone            — 실시간 모니터 (arm/녹화 상태)"
+echo "  extract_audio <bag경로>  — 마이크 원본 PCM 을 WAV 로 추출"
 echo ""
 echo "  ⚠️  온보드(무인) 운용 시 먼저 실행하세요:"
 echo "    bash scripts/setup_onboard_env.sh        # brltty 제거, sudo, 도메인 등"

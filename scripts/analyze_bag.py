@@ -21,6 +21,7 @@ import sys
 import os
 import math
 import json
+import re
 import sqlite3
 from collections import defaultdict
 
@@ -37,6 +38,10 @@ from rclpy.serialization import deserialize_message
 # ══════════════════════════════════════════════════════════════════════════════
 LOCAL_TZ    = 'Asia/Seoul'   # 로컬 타임존
 RESAMPLE_HZ = 10             # merged CSV 정렬 주기
+
+# ReSpeaker 오디오 채널 수 (respeaker_full_node 가 실제 장치에서 감지한 값)
+# 4 Mic Array (UAC1.0) 는 6채널로 열립니다.
+MIC_CHANNELS = 6
 
 # header.stamp 신뢰 임계값 (초)
 #   FC의 GPS fix가 없으면 ArduPilot이 부팅 후 경과시간을 타임스탬프로 사용하여
@@ -179,6 +184,10 @@ def parse_msg(topic, msg):
         row.update({'Mag_X': m.x, 'Mag_Y': m.y, 'Mag_Z': m.z})
 
     # ── 목표값 ────────────────────────────────────────────────────────
+    # ATTITUDE_TARGET(#83) — 자세 제어 루프의 목표값
+    # type_mask 는 어떤 필드가 무시되는지 나타냅니다 (bit set = ignore).
+    #   bit0~2: body roll/pitch/yaw rate,  bit7: attitude(quaternion)
+    # 분석 시 마스크된 필드는 신뢰하지 않아야 합니다.
     elif topic == '/mavros/setpoint_raw/target_attitude':
         q = msg.orientation
         roll, pitch, yaw = quat_to_euler(q.x, q.y, q.z, q.w)
@@ -187,12 +196,27 @@ def parse_msg(topic, msg):
         row.update({'RATE_RDes': math.degrees(r.x),
                     'RATE_PDes': math.degrees(r.y),
                     'RATE_YDes': math.degrees(r.z)})
+        if hasattr(msg, 'type_mask'):
+            tm = _to_int(msg.type_mask)
+            row['ATT_Des_TypeMask'] = tm
+            # bit7(0x80) = attitude ignore, bit0~2 = body rate ignore
+            row['ATT_Des_AttValid']  = int(not (tm & 0x80))
+            row['ATT_Des_RateValid'] = int(not (tm & 0x07))
+        if hasattr(msg, 'thrust'):
+            row['ATT_DesThrust'] = msg.thrust
 
+    # POSITION_TARGET_LOCAL_NED(#85)
+    # type_mask bit0~2: position ignore, bit3~5: velocity ignore
     elif topic == '/mavros/setpoint_raw/target_local':
         p = msg.position
         row.update({'Des_ENU_X': p.x, 'Des_ENU_Y': p.y, 'Des_ENU_Z': p.z})
         v = msg.velocity
         row.update({'Des_ENU_VX': v.x, 'Des_ENU_VY': v.y, 'Des_ENU_VZ': v.z})
+        if hasattr(msg, 'type_mask'):
+            tm = _to_int(msg.type_mask)
+            row['Des_TypeMask']  = tm
+            row['Des_PosValid']  = int(not (tm & 0x07))
+            row['Des_VelValid']  = int(not (tm & 0x38))
 
     # ── 배터리 ────────────────────────────────────────────────────────
     elif topic == '/mavros/battery':
@@ -388,6 +412,12 @@ def parse_msg(topic, msg):
         row['StatusEvent'] = str(getattr(msg, 'data', msg))[:120]
 
     # ── 항법 컨트롤러 출력 ────────────────────────────────────────────
+    # NAV_CONTROLLER_OUTPUT(#62) — 항법 계층이 요구하는 목표 자세.
+    # ATTITUDE_TARGET(#83, setpoint_raw/target_attitude) 은 자세 제어 루프의
+    # 목표값이므로 계층이 다릅니다. 두 값을 함께 보면
+    #   항법 목표(Nav_Roll) → 자세 목표(ATT_DesRoll) → 실제(ATT_Roll)
+    # 흐름으로 어느 단계에서 오차가 커지는지 구분할 수 있습니다.
+    # ArduPilot 은 nav_roll/nav_pitch 를 도(deg) 단위로 전송합니다.
     elif topic == '/mavros/nav_controller_output/output':
         for f, key in (('nav_roll', 'Roll'), ('nav_pitch', 'Pitch'),
                        ('nav_bearing', 'Bearing'), ('target_bearing', 'TgtBearing'),
@@ -436,58 +466,150 @@ def parse_msg(topic, msg):
     elif topic == '/respeaker/energy':
         row['MIC_Energy'] = msg.data
 
+    # ── 마이크 원본 PCM ───────────────────────────────────────────────
+    # 16kHz 6ch int16 raw. 원본 파형은 CSV 에 담을 수 없으므로
+    # 프레임 단위 요약 통계만 기록합니다.
+    # 파형 자체가 필요하면 rosbag 에서 직접 추출하세요 (extract_audio 참고).
+    elif topic == '/respeaker/audio':
+        raw = bytes(msg.data)
+        if len(raw) >= 2:
+            pcm = np.frombuffer(raw, dtype=np.int16)
+            # ch0(빔포밍 처리 출력)만 추출
+            ch0 = pcm[::MIC_CHANNELS] if MIC_CHANNELS > 1 else pcm
+            if ch0.size:
+                f = ch0.astype(np.float32)
+                row['MICRaw_RMS']    = float(np.sqrt(np.mean(f ** 2)))
+                row['MICRaw_Peak']   = float(np.max(np.abs(f)))
+                row['MICRaw_Samples'] = int(ch0.size)
+                # 클리핑 발생 비율 (int16 한계 근처)
+                row['MICRaw_ClipPct'] = float(np.mean(np.abs(f) > 32000) * 100.0)
+
     return row
 
 
-def read_bag(bag_path):
-    """bag 읽기 — bag_time / source_time 모두 보존"""
-    db_path = None
-    for f in sorted(os.listdir(bag_path)):
-        if f.endswith('.db3'):
-            db_path = os.path.join(bag_path, f)
-            break
-    if db_path is None:
+def list_db_files(bag_path):
+    """
+    bag 폴더의 모든 split db3 파일을 올바른 순서로 반환
+
+    rosbag2 는 max_bag_duration/size 에 도달하면 파일을 분할합니다.
+      <name>_0.db3, <name>_1.db3, ...
+    metadata.yaml 의 relative_file_paths 순서를 우선 사용하고,
+    없으면 파일명의 숫자 접미사로 정렬합니다.
+    """
+    meta_path = os.path.join(bag_path, 'metadata.yaml')
+    files = []
+
+    # 1) metadata.yaml 기준 (가장 정확)
+    if os.path.isfile(meta_path):
+        try:
+            import yaml
+            with open(meta_path, 'r') as f:
+                meta = yaml.safe_load(f)
+            info = meta.get('rosbag2_bagfile_information', {})
+            for rel in info.get('relative_file_paths', []):
+                p = os.path.join(bag_path, os.path.basename(rel))
+                if os.path.isfile(p):
+                    files.append(p)
+                else:
+                    print(f'  [경고] metadata 에 있으나 파일 없음: {rel}')
+        except Exception as e:
+            print(f'  [경고] metadata.yaml 파싱 실패 ({e}) — 파일명 정렬로 대체')
+            files = []
+
+    # 2) 파일명 숫자 접미사 정렬 (fallback)
+    if not files:
+        def seq(name):
+            m = re.search(r'_(\d+)\.db3$', name)
+            return int(m.group(1)) if m else 0
+        files = [os.path.join(bag_path, f)
+                 for f in sorted(os.listdir(bag_path), key=seq)
+                 if f.endswith('.db3')]
+
+    if not files:
         raise FileNotFoundError(f'.db3 파일을 찾을 수 없습니다: {bag_path}')
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name, type FROM topics")
-    topics = {r[0]: (r[1], r[2]) for r in cursor.fetchall()}
+    return files
+
+
+def read_bag(bag_path):
+    """
+    bag 읽기 — 분할된 모든 db3 를 순서대로 처리
+    bag_time / source_time 을 모두 보존합니다.
+    """
+    db_files = list_db_files(bag_path)
+
+    if len(db_files) > 1:
+        print(f'  분할 파일 {len(db_files)}개 감지 — 전부 읽습니다')
+        for p in db_files:
+            size_mb = os.path.getsize(p) / 1024 / 1024
+            print(f'    {os.path.basename(p)}  ({size_mb:.1f} MB)')
 
     data = defaultdict(list)
     skew_stat = defaultdict(int)   # 토픽별 skew fallback 횟수
     parse_err = {}                 # 토픽별 파싱 오류 횟수
-    cursor.execute("SELECT topic_id, timestamp, data FROM messages ORDER BY timestamp")
+    msg_total = 0
+    db_ok = 0
 
-    for topic_id, bag_ts, raw in cursor.fetchall():
-        topic_name, topic_type = topics[topic_id]
+    for db_path in db_files:
         try:
-            msg_class = get_message(topic_type)
-            msg = deserialize_message(raw, msg_class)
-        except Exception:
-            continue
-
-        # 특정 토픽 파싱 실패가 전체 분석을 중단시키지 않도록 방어
-        try:
-            row = parse_msg(topic_name, msg)
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, type FROM topics")
+            topics = {r[0]: (r[1], r[2]) for r in cursor.fetchall()}
         except Exception as e:
-            parse_err[topic_name] = parse_err.get(topic_name, 0) + 1
-            if parse_err[topic_name] == 1:
-                print(f'  [경고] {topic_name} 파싱 오류 (이후 동일 오류는 생략): {e}')
-            continue
-        if not row:
+            print(f'  [경고] {os.path.basename(db_path)} 열기 실패 — 건너뜁니다: {e}')
             continue
 
-        src_ts, src_kind = get_source_time_ns(topic_name, msg, bag_ts)
-        if src_kind == 'bag(skew)':
-            skew_stat[topic_name] += 1
+        try:
+            cursor.execute(
+                "SELECT topic_id, timestamp, data FROM messages ORDER BY timestamp")
+            rows = cursor.fetchall()
+        except Exception as e:
+            print(f'  [경고] {os.path.basename(db_path)} 읽기 실패: {e}')
+            conn.close()
+            continue
 
-        row['bag_time_ns']    = bag_ts
-        row['source_time_ns'] = src_ts
-        row['stamp_source']   = src_kind
-        data[topic_name].append(row)
+        for topic_id, bag_ts, raw in rows:
+            if topic_id not in topics:
+                continue
+            topic_name, topic_type = topics[topic_id]
+            try:
+                msg_class = get_message(topic_type)
+                msg = deserialize_message(raw, msg_class)
+            except Exception:
+                continue
 
-    conn.close()
+            # 특정 토픽 파싱 실패가 전체 분석을 중단시키지 않도록 방어
+            try:
+                row = parse_msg(topic_name, msg)
+            except Exception as e:
+                parse_err[topic_name] = parse_err.get(topic_name, 0) + 1
+                if parse_err[topic_name] == 1:
+                    print(f'  [경고] {topic_name} 파싱 오류 (이후 동일 오류는 생략): {e}')
+                continue
+            if not row:
+                continue
+
+            src_ts, src_kind = get_source_time_ns(topic_name, msg, bag_ts)
+            if src_kind == 'bag(skew)':
+                skew_stat[topic_name] += 1
+
+            row['bag_time_ns']    = bag_ts
+            row['source_time_ns'] = src_ts
+            row['stamp_source']   = src_kind
+            data[topic_name].append(row)
+            msg_total += 1
+
+        conn.close()
+        db_ok += 1
+
+    if db_ok == 0:
+        raise ValueError('읽을 수 있는 db3 파일이 없습니다.')
+    if db_ok < len(db_files):
+        print(f'  [경고] {len(db_files)}개 중 {db_ok}개만 읽었습니다 '
+              f'— 데이터가 누락될 수 있습니다')
+
+    print(f'  총 {msg_total:,} 메시지 로드 (db3 {db_ok}/{len(db_files)})')
 
     # skew 발생 토픽 경고
     if skew_stat:
@@ -540,6 +662,56 @@ def _stale_limit_for(col):
         if col.startswith(prefix):
             return limit
     return DEFAULT_STALE
+
+
+def _wrap180(s):
+    """각도 차이를 -180~180 범위로 정규화 (Yaw 오차 계산용)"""
+    return ((s + 180.0) % 360.0) - 180.0
+
+
+def add_tracking_errors(df):
+    """
+    목표 대비 실제의 추종 오차를 파생 컬럼으로 추가
+
+    제어 계층 구조:
+      NAV_CONTROLLER_OUTPUT (#62)  항법 계층이 요구하는 목표 자세
+        → ATTITUDE_TARGET   (#83)  자세 제어 루프의 목표값
+          → ATTITUDE        (#30)  실제 기체 자세
+
+    각 단계의 오차를 나누어 보면 문제 발생 계층을 구분할 수 있습니다.
+    필요한 컬럼이 없으면 해당 오차는 생성하지 않습니다.
+    """
+    def diff(a, b, out, wrap=False):
+        if a in df.columns and b in df.columns:
+            d = df[a] - df[b]
+            df[out] = _wrap180(d) if wrap else d
+
+    # 자세 추종 오차 (목표 - 실제)
+    diff('ATT_DesRoll',  'ATT_Roll',  'Err_Roll')
+    diff('ATT_DesPitch', 'ATT_Pitch', 'Err_Pitch')
+    diff('ATT_DesYaw',   'ATT_Yaw',   'Err_Yaw', wrap=True)
+
+    # 각속도 추종 오차
+    diff('RATE_RDes', 'RATE_R', 'Err_RateR')
+    diff('RATE_PDes', 'RATE_P', 'Err_RateP')
+    diff('RATE_YDes', 'RATE_Y', 'Err_RateY')
+
+    # 항법 계층 오차 (NAV_CONTROLLER_OUTPUT 기준)
+    diff('Nav_Roll',  'ATT_Roll',  'ErrNav_Roll')
+    diff('Nav_Pitch', 'ATT_Pitch', 'ErrNav_Pitch')
+
+    # 위치·속도 추종 오차 (ENU 기준)
+    for ax in ('X', 'Y', 'Z'):
+        diff(f'Des_ENU_{ax}',  f'LocalENU_{ax}',  f'Err_Pos{ax}')
+        diff(f'Des_ENU_V{ax}', f'LocalENU_V{ax}', f'Err_Vel{ax}')
+
+    # 자세 오차 크기 (Roll/Pitch 합성) — 단일 이상 지표로 사용 가능
+    if 'Err_Roll' in df.columns and 'Err_Pitch' in df.columns:
+        df['Err_AttMag'] = np.sqrt(
+            df['Err_Roll'].fillna(0) ** 2 + df['Err_Pitch'].fillna(0) ** 2
+        )
+
+    return df
 
 
 def merge_10hz(dfs, output_prefix, t0_ns):
@@ -625,6 +797,12 @@ def merge_10hz(dfs, output_prefix, t0_ns):
                 merged.loc[stale_mask, c] = np.nan
 
         merged = merged.drop(columns=['_last_seen'])
+
+    # ── 추종 오차 파생 컬럼 ──────────────────────────────────────────
+    # 제어 계층별로 목표와 실제의 차이를 계산합니다.
+    #   항법 목표(Nav_*) → 자세 목표(ATT_Des*) → 실제(ATT_*)
+    # 각 단계의 오차를 비교하면 어느 계층에서 문제가 생겼는지 구분됩니다.
+    merged = add_tracking_errors(merged)
 
     # 시간 컬럼 정리
     dt_utc = pd.to_datetime(

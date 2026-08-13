@@ -110,7 +110,7 @@ TOPICS=(
     /respeaker/doa
     /respeaker/vad
     /respeaker/energy
-    # /respeaker/audio  # 용량 큼 — 필요 시 주석 해제
+    /respeaker/audio       # 16kHz 6ch PCM 원본 (약 187 KB/s, 0.64 GB/시간)
 )
 
 echo "=========================================="

@@ -48,7 +48,8 @@ anomaly_sensor_ros2/
 │   ├── thl100_sensor/
 │   ├── wcm6800_sensor/
 │   └── drone_sensors/
-│       └── launch/drone_sensor_launch.py
+│       ├── launch/drone_sensor_launch.py
+│       └── config/apm_pluginlists.yaml   # mavros 플러그인 (vibration 활성화)
 ├── scripts/
 │   ├── record_data.sh         # rosbag 수동 녹화
 │   ├── analyze_bag.py         # CSV 변환 + 10Hz 정렬 + 그래프
@@ -59,7 +60,8 @@ anomaly_sensor_ros2/
 │   ├── guard_service.sh       # 수동 실행 시 서비스 충돌 방지
 │   ├── watch_fcu.sh           # FC 연결 감시 / 자동 복구
 │   ├── setup_onboard_env.sh   # 온보드 환경 일괄 설정
-│   └── monitor_drone.sh       # 실시간 모니터 (arm/녹화 상태)
+│   ├── monitor_drone.sh       # 실시간 모니터 (arm/녹화 상태)
+│   └── extract_audio.py       # 마이크 원본 PCM → WAV 추출
 ├── tests/
 │   ├── test_parsers.py        # 파서/좌표변환 단위 테스트
 │   └── virtual_uart_test.sh   # 가상 UART 통합 테스트
@@ -127,6 +129,7 @@ install.sh가 자동 처리하는 것:
 | `watch_fcu` | `watch_fcu.sh` | FC 연결 감시 / 상태 점검 |
 | `onboard_env` | `setup_onboard_env.sh` | 온보드 환경 설정 / 상태 확인 |
 | `monitor_drone` | `monitor_drone.sh` | 실시간 모니터 (arm/녹화 전환 추적) |
+| `extract_audio` | `extract_audio.py` | 마이크 원본 PCM을 WAV로 추출 |
 
 ```bash
 start_drone                                          # 전체 실행
@@ -217,6 +220,42 @@ USB 직결이면 `SR0_*`, TELEM1이면 `SR1_*`로 동일하게 설정합니다.
 **대역폭 검토** — 921600bps는 초당 약 92KB를 전송할 수 있고, 위 설정의 예상 트래픽은 15~20KB/s로 약 25% 수준입니다. 여유가 충분합니다.
 
 **SR 방식을 쓰는 이유** — ArduPilot은 정밀 제어 시 `MAV_CMD_SET_MESSAGE_INTERVAL`(메시지별 개별 요청)을 권장하지만, 이 방식은 **휘발성이라 FC 재부팅 시 소실**됩니다. 무인 운용에서는 매 부팅마다 재요청해야 하고 한 번 실패하면 해당 비행 데이터가 비어버립니다. SR 파라미터는 FC에 영구 저장되어 그런 위험이 없고, 921600bps에서는 그룹 방식의 대역폭 비효율도 문제가 되지 않습니다.
+
+### mavros 플러그인 설정
+
+mavros 기본 설정(`/opt/ros/humble/share/mavros/launch/apm_pluginlists.yaml`)은 일부 플러그인을 `plugin_denylist`로 막아둡니다. 그중 두 개가 이 프로젝트에 필요합니다.
+
+| 플러그인 | 토픽 | 용도 |
+|---|---|---|
+| `vibration` | `/mavros/vibration/raw/vibration` | 진동 — 모터 이상탐지 핵심 지표 |
+| `altitude` | `/mavros/altitude` | 고도 상세 (AMSL, 지형 등) |
+
+SR 파라미터를 설정해도 플러그인이 로드되지 않으면 토픽 자체가 생성되지 않습니다. 로그에 이렇게 남습니다.
+
+```
+[mavros.mavros]: Plugin vibration ignored
+```
+
+`src/drone_sensors/config/apm_pluginlists.yaml`에 두 플러그인을 활성화한 목록을 두고 launch가 이를 사용합니다. 시스템 파일을 직접 고치면 mavros 업데이트 시 되돌아가므로 패키지 안에서 관리합니다.
+
+**apm.launch 대신 node.launch를 직접 include합니다.** `apm.launch`는 `pluginlists_yaml`을 인자로 선언하지 않고 하위 `node.launch`에 하드코딩해 전달하므로, 외부에서 값을 줘도 무시되기 때문입니다.
+
+```xml
+<!-- apm.launch — pluginlists_yaml 인자 선언이 없음 -->
+<include file="$(find-pkg-share mavros)/launch/node.launch">
+    <arg name="pluginlists_yaml" value="$(find-pkg-share mavros)/launch/apm_pluginlists.yaml" />
+                                        ↑ 하드코딩
+</include>
+```
+
+`node.launch`는 `pluginlists_yaml`, `config_yaml`을 모두 인자로 받으므로 우리 파일을 지정할 수 있습니다. `config_yaml`은 mavros 기본값(`apm_config.yaml`)을 그대로 씁니다.
+
+확인 방법입니다.
+
+```bash
+grep -i "vibration" ~/anomaly_data/onboard.log | tail -3   # "ignored" 가 없어야 정상
+timeout 8 ros2 topic hz /mavros/vibration/raw/vibration
+```
 
 ### 설정 후 실측 확인
 

@@ -93,6 +93,7 @@ DEFAULT_TOPICS = [
     '/respeaker/doa',
     '/respeaker/vad',
     '/respeaker/energy',
+    '/respeaker/audio',   # 16kHz 6ch PCM 원본 (약 187 KB/s)
 ]
 
 
@@ -106,7 +107,7 @@ class AutoRecordNode(Node):
         self.declare_parameter('auto_on_arm',       True)
         self.declare_parameter('post_disarm_sec',   10.0)
         self.declare_parameter('min_free_gb',       2.0)
-        self.declare_parameter('max_bag_duration',  300)     # 0이면 분할 안 함
+        self.declare_parameter('max_bag_duration',  3000)    # 0이면 분할 안 함
         self.declare_parameter('topics',            DEFAULT_TOPICS)
         self.declare_parameter('name_prefix',       'flight')
 

@@ -30,6 +30,20 @@ mkdir -p "$SAVE_DIR"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
+# ── 로그 로테이션 ─────────────────────────────────────────────────────
+# onboard.log 는 서비스가 append 로 계속 기록하므로 장기 운용 시
+# 수백 MB 까지 커져 grep 이 "바이너리 파일" 로 인식하기도 합니다.
+# 시작 시 크기를 확인해 임계값을 넘으면 한 세대만 보관하고 새로 시작합니다.
+LOG_FILE="$SAVE_DIR/onboard.log"
+LOG_MAX_MB="${LOG_MAX_MB:-50}"
+if [ -f "$LOG_FILE" ]; then
+    size_mb=$(du -m "$LOG_FILE" 2>/dev/null | cut -f1)
+    if [ -n "$size_mb" ] && [ "$size_mb" -ge "$LOG_MAX_MB" ]; then
+        mv -f "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null || true
+        : > "$LOG_FILE" 2>/dev/null || true
+    fi
+fi
+
 log "=========================================="
 log " 온보드 데이터 수집 시작"
 log " 워크스페이스: $WS"
@@ -127,5 +141,5 @@ exec ros2 launch drone_sensors drone_sensor_launch.py \
     use_auto_record:=true \
     save_dir:="$SAVE_DIR" \
     post_disarm_sec:=10.0 \
-    max_bag_duration:=300 \
+    max_bag_duration:=3000 \
     min_free_gb:=2.0

@@ -109,7 +109,7 @@ def generate_launch_description():
     )
     max_bag_duration_arg = DeclareLaunchArgument(
         'max_bag_duration',
-        default_value='300',
+        default_value='3000',
         description='bag 분할 주기(초). 0이면 분할하지 않음'
     )
     min_free_gb_arg = DeclareLaunchArgument(
@@ -118,19 +118,39 @@ def generate_launch_description():
         description='녹화에 필요한 최소 디스크 여유 공간(GB)'
     )
 
-    # ── mavros (원본 토픽 그대로 사용) ────────────────────────────────
+    # ── mavros ────────────────────────────────────────────────────────
+    # mavros 기본 pluginlist 는 vibration / altitude 를 denylist 로 막아
+    # 해당 토픽이 아예 생성되지 않습니다 (로그: "Plugin vibration ignored").
+    # 진동은 모터 이상탐지의 핵심 지표이므로 커스텀 pluginlist 를 씁니다.
+    #
+    # 주의: apm.launch 는 pluginlists_yaml 을 인자로 선언하지 않고
+    #       node.launch 에 하드코딩해 전달하므로, 밖에서 값을 줘도 무시됩니다.
+    #         apm.launch:  <arg name="pluginlists_yaml" value="...mavros/..." />
+    #       따라서 apm.launch 를 건너뛰고 node.launch 를 직접 include 합니다.
+    #       (config_yaml 은 mavros 기본값을 그대로 사용)
+    mavros_share = get_package_share_directory('mavros')
+
+    pluginlists_yaml = os.path.join(
+        get_package_share_directory('drone_sensors'),
+        'config', 'apm_pluginlists.yaml'
+    )
+    config_yaml = os.path.join(mavros_share, 'launch', 'apm_config.yaml')
+
     mavros_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('mavros'),
-                'launch', 'apm.launch'
-            )
+            os.path.join(mavros_share, 'launch', 'node.launch')
         ),
         launch_arguments={
-            'fcu_url':      LaunchConfiguration('fcu_url'),
-            'fcu_protocol': 'v2.0',
-            'gcs_url':      '',
-            'log_output':   'log',
+            'fcu_url':          LaunchConfiguration('fcu_url'),
+            'gcs_url':          '',
+            'tgt_system':       '1',
+            'tgt_component':    '1',
+            'pluginlists_yaml': pluginlists_yaml,
+            'config_yaml':      config_yaml,
+            'fcu_protocol':     'v2.0',
+            'respawn_mavros':   'false',
+            'namespace':        'mavros',
+            'log_output':       'log',
         }.items()
     )
 

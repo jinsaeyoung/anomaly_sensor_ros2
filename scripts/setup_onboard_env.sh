@@ -99,7 +99,22 @@ do_check() {
     fi
 
     echo ""
-    echo "[8] systemd 서비스"
+    echo "[8] 로그 파일 권한"
+    LOG_FILE="$HOME/anomaly_data/onboard.log"
+    if [ -f "$LOG_FILE" ]; then
+        owner=$(stat -c '%U' "$LOG_FILE")
+        size_mb=$(du -m "$LOG_FILE" 2>/dev/null | cut -f1)
+        if [ "$owner" = "$RUN_USER" ]; then
+            ok "사용자 소유 (${size_mb}MB)"
+        else
+            fail "root 소유 — 로그 비우기 불가 (sudo chown $RUN_USER:$RUN_USER $LOG_FILE)"
+        fi
+    else
+        warn "로그 파일 없음 (서비스 미실행)"
+    fi
+
+    echo ""
+    echo "[9] systemd 서비스"
     if [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
         echo -n "     실행:        "; systemctl is-active  "$SERVICE_NAME" 2>/dev/null || echo inactive
         echo -n "     부팅 자동실행: "; systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || echo disabled
@@ -125,7 +140,7 @@ echo " 워크스페이스: $WS"
 echo "=========================================="
 
 # ── 1. brltty 제거 ────────────────────────────────────────────────────
-head "[1/6] brltty 제거 (CH340 젠더 충돌 해결)"
+head "[1/7] brltty 제거 (CH340 젠더 충돌 해결)"
 echo ""
 echo " Ubuntu 기본 설치된 brltty(점자 단말기 데몬)가 CH340(1a86:7523)을"
 echo " 점자 장치로 오인해 가로채면, ch341 드라이버가 바인딩되지 못해"
@@ -147,7 +162,7 @@ else
 fi
 
 # ── 2. sudo NOPASSWD ──────────────────────────────────────────────────
-head "[2/6] sudo NOPASSWD 설정 (자동 복구용)"
+head "[2/7] sudo NOPASSWD 설정 (자동 복구용)"
 echo ""
 echo " watch_fcu 가 FC 연결 실패 시 서비스를 자동 재시작하려면"
 echo " 비밀번호 없이 systemctl 을 실행할 수 있어야 합니다."
@@ -174,7 +189,7 @@ else
 fi
 
 # ── 3. ROS_DOMAIN_ID 고정 ─────────────────────────────────────────────
-head "[3/6] ROS_DOMAIN_ID 고정"
+head "[3/7] ROS_DOMAIN_ID 고정"
 echo ""
 echo " systemd 서비스는 ROS_DOMAIN_ID=0 으로 실행됩니다."
 echo " 셸에 값이 없거나 다르면 DDS 도메인이 달라져"
@@ -190,7 +205,7 @@ fi
 export ROS_DOMAIN_ID=0
 
 # ── 4. udev 규칙 ──────────────────────────────────────────────────────
-head "[4/6] udev 규칙 설정"
+head "[4/7] udev 규칙 설정"
 
 echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2886", MODE="0666"' | \
     sudo tee /etc/udev/rules.d/60-respeaker.rules > /dev/null
@@ -208,7 +223,7 @@ sudo udevadm trigger
 ok "udev 규칙 재적용"
 
 # ── 5. dialout 그룹 ───────────────────────────────────────────────────
-head "[5/6] dialout 그룹"
+head "[5/7] dialout 그룹"
 
 if id -nG "$RUN_USER" | tr ' ' '\n' | grep -qx dialout; then
     ok "이미 등록됨"
@@ -223,8 +238,25 @@ if ! groups | tr ' ' '\n' | grep -qx dialout; then
     NEED_RELOGIN=1
 fi
 
-# ── 6. 검증 ───────────────────────────────────────────────────────────
-head "[6/6] 적용 결과 확인"
+# ── 6. 로그 파일 권한 ─────────────────────────────────────────────────
+head "[6/7] 로그 파일 권한"
+echo ""
+echo " systemd 의 append: 모드는 파일이 없으면 root 소유로 생성합니다."
+echo " 그러면 사용자가 로그를 비울 수 없어 미리 소유권을 맞춰둡니다."
+echo ""
+
+mkdir -p "$HOME/anomaly_data"
+LOG_FILE="$HOME/anomaly_data/onboard.log"
+[ -f "$LOG_FILE" ] || touch "$LOG_FILE"
+if [ "$(stat -c '%U' "$LOG_FILE")" != "$RUN_USER" ]; then
+    sudo chown "$RUN_USER:$RUN_USER" "$LOG_FILE"
+    ok "소유권 수정 완료"
+else
+    ok "이미 사용자 소유"
+fi
+
+# ── 7. 검증 ───────────────────────────────────────────────────────────
+head "[7/7] 적용 결과 확인"
 do_check
 
 # ── 안내 ──────────────────────────────────────────────────────────────

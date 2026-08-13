@@ -104,6 +104,20 @@ fi
 
 mkdir -p "$SAVE_DIR"
 
+# ── 로그 파일 준비 ────────────────────────────────────────────────────
+# systemd 의 append: 모드는 파일이 없으면 root 소유로 생성합니다.
+# 그러면 사용자가 로그를 비우거나 로테이션할 수 없으므로
+# 미리 사용자 소유로 만들어 둡니다.
+LOG_FILE="$SAVE_DIR/onboard.log"
+if [ ! -f "$LOG_FILE" ]; then
+    touch "$LOG_FILE"
+fi
+if [ "$(stat -c '%U' "$LOG_FILE")" != "$RUN_USER" ]; then
+    sudo chown "$RUN_USER:$RUN_USER" "$LOG_FILE"
+    echo "  로그 파일 소유권 수정: $LOG_FILE"
+fi
+chmod 644 "$LOG_FILE" 2>/dev/null || sudo chmod 644 "$LOG_FILE"
+
 # ── 서비스 파일 생성 ──────────────────────────────────────────────────
 # KillSignal=SIGINT 가 핵심입니다.
 #   rosbag 은 SIGINT 를 받아야 파일을 정상 마감합니다.
