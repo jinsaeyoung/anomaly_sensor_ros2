@@ -804,6 +804,25 @@ PC 부팅 후 아무도 포트를 읽지 않은 동안 tty/드라이버 버퍼�
 | 발행 타임스탬프 | `self.get_clock().now()` | ROS 시간 체계 일관성 |
 | 경과시간 측정 (stale, drain) | `time.monotonic()` | NTP 시각 점프에 영향받지 않음 |
 
+**일시적 오류와 실제 단선 구분**
+
+pyserial은 데이터가 잠시 없을 때도 아래 예외를 던질 수 있습니다.
+
+```
+device reports readiness to read but returned no data
+(device disconnected or multiple access on port?)
+```
+
+메시지와 달리 장치가 빠진 것이 아닌 경우가 많습니다. 이를 재연결로 처리하면 포트를 닫았다 여는 동작이 반복되어 오히려 수신율이 떨어지고 USB 재열거링을 유발할 수 있습니다.
+
+수신 루프는 `in_waiting`이 0이면 블로킹하지 않고 짧게 대기 후 재확인하며, 위와 같은 일시적 오류는 포트를 유지한 채 재시도합니다. 진단 로그의 `transient` 항목으로 발생 횟수를 확인할 수 있습니다.
+
+```
+THL100 진단 [30s] rx=28 (0.93Hz) ok=28 fail=0 seq_gap=0 | 누적 rx=419 reconnect=1 transient=0
+```
+
+`reconnect`가 계속 늘어나면 실제 하드웨어 문제(전력·케이블)를 의심해야 합니다.
+
 **기타**
 - USB 분리 시 자동 재연결
 - 스트림 버퍼 파서 — 나뉘어 온 패킷, 붙어 온 패킷, 쓰레기 데이터 모두 처리
@@ -1111,3 +1130,5 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0
 | `datetime` 9시간 차이 | UTC → KST 변환 누락 | `LOCAL_TZ` 기준 변환 (적용됨) |
 | `monitor_drone`에서 저주기 토픽이 `--` | `topic hz` 타임아웃 부족 | 8초로 상향 (적용됨) |
 | FC 연결 끊김 (`No such device`) | USB 분리/FC 재부팅 | 재연결 후 `stop_drone` → `start_drone` |
+| UART 센서가 `readiness to read but returned no data` 반복, 수신율 하락 | `read(in_waiting or 1)`이 데이터 없을 때 블로킹하다 예외 발생 → 불필요한 재연결 | `in_waiting`이 0이면 짧게 대기 후 재확인하도록 수정(적용됨). 일시적 오류는 포트를 닫지 않음 |
+| `dmesg`에 `USB disconnect` 반복 | 허브 전력 부족, 케이블 접촉, TELEM2 VCC 연결 | 젠더를 본체 포트에 직접 연결해 확인. TELEM2 VCC(1번 핀)는 **연결 금지** |

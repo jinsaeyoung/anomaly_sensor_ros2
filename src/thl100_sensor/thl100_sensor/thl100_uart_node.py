@@ -64,7 +64,7 @@ class THL100Node(Node):
         self._buffer        = ''     # 스트림 버퍼
 
         # 진단 카운터
-        self._stat = {'rx': 0, 'parse_ok': 0, 'parse_fail': 0,
+        self._stat = {'rx': 0, 'parse_ok': 0, 'parse_fail': 0, 'transient': 0,
                       'reconnect': 0, 'seq_gap': 0}
         self._stat_prev       = dict(self._stat)
         self._diag_period_sec = 30.0
@@ -206,7 +206,17 @@ class THL100Node(Node):
                     self._last_seq = None   # 재연결 후 첫 패킷은 gap 계산 제외
 
             try:
-                chunk = self.ser.read(self.ser.in_waiting or 1)
+                # timeout 안에 데이터가 없으면 b'' 를 반환합니다(정상).
+                # in_waiting 이 0 일 때 read(1) 로 블로킹하면
+                # pyserial 이 "readiness to read but returned no data" 예외를
+                # 던지는 경우가 있어, 대기 후 남은 바이트를 일괄로 읽습니다.
+                n = self.ser.in_waiting
+                if n:
+                    chunk = self.ser.read(n)
+                else:
+                    # 짧게 쉬고 다시 확인 (CPU 점유 방지)
+                    self._stop_event.wait(0.02)
+                    continue
                 if not chunk:
                     continue
 
@@ -247,8 +257,25 @@ class THL100Node(Node):
                         self._latest_rx_mono = now_mono
 
             except (serial.SerialException, OSError) as e:
+                msg = str(e)
+                # 아래는 데이터가 잠시 없을 때도 발생하는 일시적 오류입니다.
+                # 장치가 실제로 빠진 것이 아니므로 포트를 닫지 않고 재시도합니다.
+                # (닫았다 여는 동작 자체가 USB 재열거링을 유발할 수 있음)
+                transient = (
+                    'readiness to read' in msg
+                    or 'returned no data' in msg
+                    or 'Interrupted system call' in msg
+                )
+                if transient and self.ser is not None and self.ser.is_open:
+                    self._stat['transient'] = self._stat.get('transient', 0) + 1
+                    self._stop_event.wait(0.05)
+                    continue
+
                 if not self._stop_event.is_set():
-                    self.get_logger().warn(f'시리얼 오류 — 재연결 시도: {e}')
+                    self.get_logger().warn(
+                        f'시리얼 오류 — 재연결 시도: {e}',
+                        throttle_duration_sec=5.0
+                    )
                 try:
                     if self.ser:
                         self.ser.close()
@@ -314,6 +341,7 @@ class THL100Node(Node):
         p = self._stat_prev
         period = self._diag_period_sec
 
+        d_tr   = s.get('transient', 0) - p.get('transient', 0)
         d_rx   = s['rx']         - p['rx']
         d_ok   = s['parse_ok']   - p['parse_ok']
         d_fail = s['parse_fail'] - p['parse_fail']
@@ -328,7 +356,8 @@ class THL100Node(Node):
         self.get_logger().info(
             f"THL100 진단 [{period:.0f}s] rx={d_rx} ({hz:.2f}Hz) "
             f"ok={d_ok} fail={d_fail} seq_gap={d_gap} "
-            f"| 누적 rx={s['rx']} reconnect={s['reconnect']}"
+            f"| 누적 rx={s['rx']} reconnect={s['reconnect']} "
+            f"transient={d_tr}"
         )
 
     def destroy_node(self):
