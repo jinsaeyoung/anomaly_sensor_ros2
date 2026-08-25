@@ -324,6 +324,84 @@ class TestTypeMask(unittest.TestCase):
         self.assertEqual(int(not (0x38 & 0x38)), 0)
 
 
+class TestSerialAutodetect(unittest.TestCase):
+    """
+    시리얼 장치 자동 탐색 시그니처 검증
+
+    같은 모델 USB-TTL 젠더를 여러 개 쓰면 VID:PID 로 구분할 수 없고,
+    by-id 는 젠더를 교체하면 경로가 바뀝니다.
+    데이터 패턴으로 판별하므로 상호 오탐이 없어야 합니다.
+    """
+
+    @staticmethod
+    def _thl100(data):
+        import re
+        text = data.decode('ascii', errors='ignore')
+        return len(re.findall(r'@[A-Za-z0-9]+,\d+,[\d.\-]*,[\d.\-]*,[\d.\-]*', text))
+
+    @staticmethod
+    def _wcm6800(data):
+        text = data.decode('ascii', errors='ignore')
+        hits = 0
+        for line in text.replace('\r', '\n').split('\n'):
+            line = line.strip()
+            if len(line) == 6 and line[0] in '~+-' and line[1:].isdigit():
+                hits += 1
+        return hits
+
+    @staticmethod
+    def _mavlink(data):
+        hits, i, n = 0, 0, len(data)
+        while i < n - 3:
+            b = data[i]
+            if b == 0xFD:
+                plen = data[i + 1]
+                if plen <= 253 and i + 12 + plen <= n:
+                    hits += 1
+                    i += 12 + plen
+                    continue
+            elif b == 0xFE:
+                plen = data[i + 1]
+                if plen <= 255 and i + 8 + plen <= n:
+                    hits += 1
+                    i += 8 + plen
+                    continue
+            i += 1
+        return hits
+
+    # ── THL100 ──────────────────────────────────────────────────
+    def test_thl100_match(self):
+        data = b'@T453,1664,25.1,43.5,36.6\r\n@T453,1665,25.1,43.5,46.6\r\n'
+        self.assertEqual(self._thl100(data), 2)
+
+    def test_thl100_missing_field(self):
+        self.assertEqual(self._thl100(b'@T453,100,,38.3,236.5\r\n'), 1)
+
+    def test_thl100_no_false_positive(self):
+        self.assertEqual(self._thl100(b'+01230\r\n+01240\r\n'), 0)
+
+    # ── WCM6800 ─────────────────────────────────────────────────
+    def test_wcm6800_match(self):
+        self.assertEqual(self._wcm6800(b'+01230\r\n~00450\r\n-01230\r\n'), 3)
+
+    def test_wcm6800_no_false_positive(self):
+        self.assertEqual(self._wcm6800(b'@T453,1664,25.1,43.5,36.6\r\n'), 0)
+
+    def test_wcm6800_wrong_length(self):
+        self.assertEqual(self._wcm6800(b'+1230\r\n'), 0)
+
+    # ── MAVLink ─────────────────────────────────────────────────
+    def test_mavlink_v2_frame(self):
+        frame = bytes([0xFD, 0x09, 0x00, 0x00, 0xAF, 0x01, 0x01]) + b'\x00' * 14
+        self.assertGreaterEqual(self._mavlink(frame * 4), 3)
+
+    def test_mavlink_no_false_positive_thl100(self):
+        self.assertEqual(self._mavlink(b'@T453,1664,25.1,43.5,36.6\r\n' * 3), 0)
+
+    def test_mavlink_no_false_positive_wcm(self):
+        self.assertEqual(self._mavlink(b'+01230\r\n' * 5), 0)
+
+
 class TestStaleLogic(unittest.TestCase):
     """age 기반 stale 판정 로직 검증"""
 

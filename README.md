@@ -155,7 +155,11 @@ onboard_env check        # 모든 항목 ✅ 확인
 check_usb                # USB 장치 목록
 ```
 
-`check_usb`에 FC 젠더(`usb-1a86_USB_Serial...`)가 보여야 합니다. 장치 ID가 다르면 `src/drone_sensors/launch/drone_sensor_launch.py` 상단의 `DEFAULT_FCU_URL`을 수정하세요.
+```bash
+detect_serial            # 어떤 포트가 어느 장치인지 자동 판별
+```
+
+세 장치가 모두 확정되면 정상입니다. launch가 실행될 때도 같은 탐색을 자동으로 수행하므로, **젠더를 교체하거나 포트 순서가 바뀌어도 별도 수정이 필요 없습니다.**
 
 ### 5단계 — FC 파라미터 설정 (최초 1회)
 
@@ -316,7 +320,8 @@ anomaly_sensor_ros2/
 │   ├── watch_fcu.sh           # FC 연결 감시 / 자동 복구
 │   ├── setup_onboard_env.sh   # 온보드 환경 일괄 설정
 │   ├── monitor_drone.sh       # 실시간 모니터 (arm/녹화 상태)
-│   └── extract_audio.py       # 마이크 원본 PCM → WAV 추출
+│   ├── extract_audio.py       # 마이크 원본 PCM → WAV 추출
+│   └── serial_autodetect.py   # 시리얼 장치 자동 탐색
 ├── tests/
 │   ├── test_parsers.py        # 파서/좌표변환 단위 테스트
 │   └── virtual_uart_test.sh   # 가상 UART 통합 테스트
@@ -347,6 +352,7 @@ anomaly_sensor_ros2/
 | `onboard_env` | `setup_onboard_env.sh` | 온보드 환경 설정 / 상태 확인 |
 | `monitor_drone` | `monitor_drone.sh` | 실시간 모니터 (arm/녹화 전환 추적) |
 | `extract_audio` | `extract_audio.py` | 마이크 원본 PCM을 WAV로 추출 |
+| `detect_serial` | `serial_autodetect.py` | 시리얼 장치 자동 탐색 |
 
 ```bash
 start_drone                                          # 전체 실행
@@ -360,27 +366,74 @@ stop_drone
 
 ## 장치 경로 설정
 
-```bash
-check_usb
+### 자동 탐색 (기본 동작)
+
+같은 모델의 USB-TTL 젠더를 여러 개 쓰면 `VID:PID`로 구분할 수 없고, `by-id` 경로는 젠더 개체를 교체하면 바뀝니다. 실제로 THL100과 FC 젠더가 동일 모델(PL2303)인 경우가 있어, **각 포트를 열어 수신 데이터 패턴으로 장치를 판별**합니다.
+
+| 장치 | baud | 시그니처 |
+|---|---|---|
+| THL100 | 9600 | `@`로 시작, 콤마 5필드 — `@T453,1234,25.1,43.5,36.6` |
+| WCM6800 | 9600 | `~`/`+`/`-` + 5자리 숫자 (6바이트) — `+01230` |
+| FC | 921600 | MAVLink 프레임 헤더 (`0xFD` v2 / `0xFE` v1) |
+
+launch 실행 시 자동으로 수행되며, 결과가 로그에 표시됩니다.
+
+```
+[launch] 시리얼 자동 탐색 결과:
+[launch]   fc       → /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+[launch]   wcm6800  → /dev/serial/by-id/usb-DIWELL_Electronics_CP2102N_...
+[launch]   thl100   → /dev/serial/by-id/usb-Prolific_Technology_Inc._...
 ```
 
-기본값은 `src/drone_sensors/launch/drone_sensor_launch.py` 상단 상수로 정의되어 있으며, **재빌드 없이 launch 인자로 덮어쓸 수 있습니다.**
+탐색에 실패한 장치는 아래 기본값으로 폴백합니다. 젠더를 교체하거나 포트를 바꿔도 별도 수정이 필요 없습니다.
+
+수동으로 확인하려면:
 
 ```bash
+detect_serial              # 전체 스캔 (상세 출력)
+detect_serial --json       # JSON 출력
+detect_serial --device fc  # 특정 장치 경로만
+```
+
+```
+[fc] ArduPilot FC (MAVLink) @ 921600bps 탐색
+  usb-1a86_USB_Serial-if00-port0 ... 1024bytes, 일치 12회 → 확정
+
+[wcm6800] Winson WCM6800 (전류계) @ 9600bps 탐색
+  usb-DIWELL_..._-if00-port0 ... 42bytes, 일치 6회 → 확정
+```
+
+자동 탐색을 끄려면:
+
+```bash
+ANOMALY_AUTODETECT=0 ros2 launch drone_sensors drone_sensor_launch.py
+```
+
+### 수동 지정
+
+자동 탐색보다 우선하며, 인자로 준 값이 그대로 사용됩니다.
+
+```bash
+check_usb        # 연결된 장치 확인
+
 ros2 launch drone_sensors drone_sensor_launch.py \
   fcu_url:=/dev/ttyACM0:115200 \
   thl100_port:=/dev/ttyUSB0 \
   wcm6800_port:=/dev/ttyUSB1
 ```
 
-| 인자 | 기본값 | 설명 |
-|---|---|---|
-| `fcu_url` | CubeOrange by-id:115200 | FC 연결 (USB 115200 / TELEM2 57600) |
-| `thl100_port` | Prolific by-id | THL100 시리얼 포트 |
-| `wcm6800_port` | CP2102N by-id | WCM6800 시리얼 포트 |
-| `thl100_rate` | 1.0 | THL100 발행 Hz |
-| `wcm6800_rate` | 10.0 | WCM6800 발행 Hz |
-| `respeaker_update_rate` | 50.0 | ReSpeaker DoA/VAD 폴링 Hz |
+기본값(폴백)은 `src/drone_sensors/launch/drone_sensor_launch.py` 상단의 `DEFAULT_*` 상수입니다.
+
+### 탐색이 실패하는 경우
+
+| 원인 | 확인 |
+|---|---|
+| 장치 전원 없음 | 해당 포트에서 데이터가 나오지 않음 |
+| FC TELEM 포트 비활성 | `SERIALn_PROTOCOL=2` 확인 |
+| baud 불일치 | `serial_autodetect.py`의 `DEVICE_SIGNATURES` 수정 |
+| 포트를 다른 프로세스가 점유 | `sudo lsof /dev/ttyUSB*` |
+
+탐색에는 장치당 1.5~3초가 걸립니다(1Hz인 THL100이 가장 오래 걸림). 시작 시간이 중요하면 수동 지정을 쓰세요.
 
 ---
 
@@ -1144,6 +1197,8 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0
 
 | 증상 | 원인 | 해결 |
 |---|---|---|
+| 젠더 교체 후 `No such file or directory` | `by-id`는 젠더 개체의 시리얼 번호 기반이라 교체 시 경로가 바뀜 | 자동 탐색이 처리함(적용됨). `detect_serial`로 확인 |
+| 같은 모델 젠더 2개를 구분 못 함 | VID:PID가 동일 | 데이터 시그니처로 판별(적용됨) |
 | `git clone` 시 `이미 있고 빈 디렉터리가 아닙니다` | 같은 이름의 폴더가 이미 존재 | 기존 것을 지우고 clone 하거나 `git pull`로 갱신 ([2단계](#2단계--저장소-클론-및-설치) 참고) |
 | mavros 실행 실패 (`libdiagnostic_updater.so`) | diagnostic 패키지 미설치 | `sudo apt install ros-humble-diagnostic-updater ros-humble-diagnostic-msgs` (install.sh 반영) |
 | `lsusb`엔 CH340이 보이는데 `check_usb`엔 없음 | `brltty`가 CH340을 점자 장치로 오인 | `bash scripts/setup_onboard_env.sh` 후 USB 재삽입 |

@@ -17,6 +17,7 @@
 """
 
 import os
+import sys
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -57,23 +58,71 @@ DEFAULT_WCM6800_PORT = (
 )
 
 
+def _autodetect_ports():
+    """
+    시리얼 장치를 데이터 시그니처로 자동 탐색
+
+    USB-TTL 젠더는 같은 모델을 여러 개 쓰면 VID:PID 로 구분할 수 없고,
+    by-id 는 젠더 개체를 교체하면 경로가 바뀝니다.
+    각 포트를 실제로 열어 수신 데이터 패턴으로 장치를 판별합니다.
+
+    탐색 실패 시 빈 dict 를 반환하며, 호출부에서 기본값으로 폴백합니다.
+    """
+    try:
+        sys.path.insert(0, os.path.join(
+            get_package_share_directory('drone_sensors'), 'scripts'))
+        import serial_autodetect
+        found = serial_autodetect.detect_devices()
+        if found:
+            print('[launch] 시리얼 자동 탐색 결과:')
+            for k, v in found.items():
+                print(f'[launch]   {k:8} → {v}')
+        missing = [k for k in ('fc', 'thl100', 'wcm6800') if k not in found]
+        if missing:
+            print(f'[launch] 자동 탐색 실패: {", ".join(missing)} — 기본값 사용')
+        return found
+    except Exception as e:
+        print(f'[launch] 자동 탐색 건너뜀 ({e}) — 기본값 사용')
+        return {}
+
+
 def generate_launch_description():
+
+    # ── 시리얼 장치 자동 탐색 ─────────────────────────────────────────
+    # 환경변수 ANOMALY_AUTODETECT=0 으로 끌 수 있습니다.
+    detected = {}
+    if os.environ.get('ANOMALY_AUTODETECT', '1') != '0':
+        detected = _autodetect_ports()
+
+    fcu_url_default = DEFAULT_FCU_URL
+    if 'fc' in detected:
+        # 탐색된 경로에 기존 baud 를 유지해 붙입니다.
+        baud = DEFAULT_FCU_URL.rsplit(':', 1)[-1] if ':' in DEFAULT_FCU_URL else '921600'
+        fcu_url_default = f"{detected['fc']}:{baud}"
+
+    thl100_default  = detected.get('thl100',  DEFAULT_THL100_PORT)
+    wcm6800_default = detected.get('wcm6800', DEFAULT_WCM6800_PORT)
 
     # ── Launch 인자 ───────────────────────────────────────────────────
     fcu_url_arg = DeclareLaunchArgument(
         'fcu_url',
-        default_value=DEFAULT_FCU_URL,
+        default_value=fcu_url_default,
         description='FC 연결 URL (예: /dev/ttyACM0:115200, /dev/ttyTHS1:57600)'
     )
     thl100_port_arg = DeclareLaunchArgument(
         'thl100_port',
-        default_value=DEFAULT_THL100_PORT,
+        default_value=thl100_default,
         description='THL100 온습도계 시리얼 포트'
     )
     wcm6800_port_arg = DeclareLaunchArgument(
         'wcm6800_port',
-        default_value=DEFAULT_WCM6800_PORT,
+        default_value=wcm6800_default,
         description='WCM6800 전류계 시리얼 포트'
+    )
+    autodetect_arg = DeclareLaunchArgument(
+        'autodetect',
+        default_value='true',
+        description='시리얼 장치 자동 탐색 (같은 모델 젠더 구분, 교체 대응)'
     )
     respeaker_rate_arg = DeclareLaunchArgument(
         'respeaker_update_rate',
@@ -222,6 +271,7 @@ def generate_launch_description():
         respeaker_rate_arg,
         thl100_rate_arg,
         wcm6800_rate_arg,
+        autodetect_arg,
         use_auto_record_arg,
         save_dir_arg,
         post_disarm_sec_arg,

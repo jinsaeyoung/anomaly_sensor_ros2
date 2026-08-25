@@ -94,7 +94,7 @@ PKG_DIR="$SRC/drone_sensors"
 if [ -d "$PKG_DIR" ]; then
     echo ""
     echo "[drone_sensors] 처리 중..."
-    mkdir -p "$PKG_DIR/resource" "$PKG_DIR/drone_sensors" "$PKG_DIR/config"
+    mkdir -p "$PKG_DIR/resource" "$PKG_DIR/drone_sensors" "$PKG_DIR/config" "$PKG_DIR/scripts"
     touch "$PKG_DIR/resource/drone_sensors"
     touch "$PKG_DIR/drone_sensors/__init__.py"
 
@@ -111,6 +111,13 @@ if [ -d "$PKG_DIR" ]; then
                 echo "  + package.xml 의존성 추가: $dep"
             fi
         done
+    fi
+
+    # launch 가 import 하는 자동 탐색 모듈을 패키지 안으로 복사
+    # (워크스페이스 scripts/ 가 원본, 패키지 scripts/ 는 설치본)
+    if [ -f "$WS/scripts/serial_autodetect.py" ]; then
+        cp -f "$WS/scripts/serial_autodetect.py" "$PKG_DIR/scripts/"
+        echo "  ✓ scripts/serial_autodetect.py 복사"
     fi
 
     cat > "$PKG_DIR/setup.cfg" << 'CFGEOF'
@@ -139,6 +146,9 @@ setup(
             glob('launch/*.py')),
         (os.path.join('share', package_name, 'config'),
             glob('config/*.yaml')),
+        # launch 에서 import 하는 자동 탐색 모듈
+        (os.path.join('share', package_name, 'scripts'),
+            glob('scripts/*.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

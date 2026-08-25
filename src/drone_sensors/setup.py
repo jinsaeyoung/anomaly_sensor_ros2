@@ -16,6 +16,9 @@ setup(
             glob('launch/*.py')),
         (os.path.join('share', package_name, 'config'),
             glob('config/*.yaml')),
+        # launch 에서 import 하는 자동 탐색 모듈
+        (os.path.join('share', package_name, 'scripts'),
+            glob('scripts/*.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
