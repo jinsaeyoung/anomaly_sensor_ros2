@@ -76,6 +76,8 @@ sudo apt update && sudo apt install -y ros-humble-ros-base python3-argcomplete
 
 ### 2단계 — 저장소 클론 및 설치
 
+**처음 설치하는 경우**
+
 ```bash
 cd ~
 git clone https://github.com/jinsaeyoung/anomaly_sensor_ros2.git
@@ -83,7 +85,42 @@ cd anomaly_sensor_ros2
 bash install.sh
 ```
 
-`install.sh`가 의존성 설치(mavros, pyserial, pandas 등), udev 규칙, 워크스페이스 빌드, 편의 alias 등록까지 처리합니다.
+**이미 폴더가 있는 경우**
+
+`대상 경로 'anomaly_sensor_ros2'이(가) 이미 있고 빈 디렉터리가 아닙니다` 오류가 나면 아래 중 하나를 선택하세요.
+
+기존 내용을 버리고 새로 받으려면:
+
+```bash
+cd ~
+sudo systemctl stop anomaly-sensor 2>/dev/null || true
+rm -rf anomaly_sensor_ros2
+git clone https://github.com/jinsaeyoung/anomaly_sensor_ros2.git
+cd anomaly_sensor_ros2
+bash install.sh
+```
+
+> 녹화 데이터(`~/anomaly_data`)는 별도 경로이므로 삭제되지 않습니다.
+> 다만 launch 파일의 장치 ID 등을 직접 수정했다면 그 내용도 사라지니 미리 백업하세요.
+
+기존 폴더를 유지하며 최신으로 갱신하려면:
+
+```bash
+cd ~/anomaly_sensor_ros2
+sudo systemctl stop anomaly-sensor 2>/dev/null || true
+git pull
+
+# 로컬 수정이 있어 충돌하면
+# git stash && git pull && git stash pop
+
+bash fix_packaging.sh
+rm -rf build install log
+colcon build --symlink-install
+source install/setup.bash
+bash install.sh
+```
+
+`install.sh`가 의존성 설치(mavros, pyserial, pandas 등), udev 규칙, 워크스페이스 빌드, 편의 alias 등록까지 처리합니다. 여러 번 실행해도 안전합니다.
 
 ### 3단계 — 온보드 환경 설정
 
@@ -1107,6 +1144,7 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0
 
 | 증상 | 원인 | 해결 |
 |---|---|---|
+| `git clone` 시 `이미 있고 빈 디렉터리가 아닙니다` | 같은 이름의 폴더가 이미 존재 | 기존 것을 지우고 clone 하거나 `git pull`로 갱신 ([2단계](#2단계--저장소-클론-및-설치) 참고) |
 | mavros 실행 실패 (`libdiagnostic_updater.so`) | diagnostic 패키지 미설치 | `sudo apt install ros-humble-diagnostic-updater ros-humble-diagnostic-msgs` (install.sh 반영) |
 | `lsusb`엔 CH340이 보이는데 `check_usb`엔 없음 | `brltty`가 CH340을 점자 장치로 오인 | `bash scripts/setup_onboard_env.sh` 후 USB 재삽입 |
 | 진동 토픽이 목록에 없음 (`Unknown topic`) | mavros 기본 pluginlist가 `vibration` 차단 | 커스텀 `config/apm_pluginlists.yaml` 사용 (적용됨) |
