@@ -91,6 +91,14 @@ TOPICS=(
     /mavros/nav_controller_output/output
     /mavros/wind_estimation
 
+    # ── MAVROS: 미션 / 지오펜스 ───────────────────────────────────────
+    # waypoints 는 미션 업로드·변경 시에만 발행되는 latched 성격이라
+    # 녹화 시작 시점에 한 번 기록되고 이후 변경될 때만 추가됩니다.
+    /mavros/mission/waypoints
+    /mavros/mission/reached
+    /mavros/rallypoint/rallypoints
+    /mavros/geofence/fences
+
     # ── 라벨 / 실험 메타데이터 (외부에서 발행) ────────────────────────
     /anomaly/label
     /test/metadata

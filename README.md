@@ -945,7 +945,7 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0 | 누적 rx=1387 reconnect=1
 
 ---
 
-## 녹화 토픽 (42개)
+## 녹화 토픽 (46개)
 
 ### MAVROS
 | 분류 | 토픽 |
@@ -958,6 +958,7 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0 | 누적 rx=1387 reconnect=1
 | 전력 / ESC | `/mavros/battery`, `/battery2`, `/esc_telemetry/telemetry`, `/esc_status/status` |
 | 기체 상태 | `/mavros/vfr_hud`, `/state`, `/extended_state`, `/sys_status`, `/statustext/recv`, `/status_event`, `/timesync_status` |
 | 항법 / 환경 | `/mavros/nav_controller_output/output`, `/wind_estimation` |
+| 미션 / 지오펜스 | `/mavros/mission/waypoints`, `/mission/reached`, `/rallypoint/rallypoints`, `/geofence/fences` |
 
 ### 센서 및 부가
 | 분류 | 토픽 |
@@ -1100,6 +1101,40 @@ Yaw 오차는 `-180~180`으로 정규화됩니다.
 
 값이 0인 구간의 목표값은 분석에서 제외해야 합니다.
 
+### 미션 데이터
+
+`/mavros/mission/waypoints`는 미션을 업로드하거나 변경할 때만 발행되는 latched 성격입니다. 녹화 시작 시점에 한 번 기록되고, 이후 변경될 때만 추가됩니다.
+
+웨이포인트 전체를 CSV 컬럼으로 펼칠 수 없으므로 요약만 기록합니다.
+
+| 컬럼 | 내용 |
+|---|---|
+| `Mission_Count` | 총 웨이포인트 수 |
+| `Mission_Current` | 현재 목표 seq |
+| `Mission_TgtLat/Lon/Alt` | 현재 목표 웨이포인트 좌표 |
+| `Mission_TgtCmd` | 현재 목표의 MAVLink 명령 코드 |
+| `Mission_ReachedSeq` | 도달한 웨이포인트 seq (이벤트) |
+| `Rally_Count`, `Fence_Count` | 랠리 포인트·지오펜스 개수 |
+
+전체 경로는 개별 CSV(`mavros_mission_waypoints.csv`)의 `Mission_Waypoints` 컬럼에 JSON으로 보존됩니다.
+
+```json
+[{"seq": 0, "cmd": 22, "frame": 3, "lat": 37.1, "lon": 127.1, "alt": 10.0,
+  "p1": 0.0, "p2": 0.0, "p3": 0.0, "p4": 0.0, "autocont": true}]
+```
+
+명령 분포는 `Mission_Cmds`에 `16x2,21x1,22x1` 형태로 요약됩니다(웨이포인트 2개, 착륙 1개, 이륙 1개). 주요 MAVLink 명령 코드입니다.
+
+| 코드 | 의미 |
+|---|---|
+| 16 | `NAV_WAYPOINT` |
+| 21 | `NAV_LAND` |
+| 22 | `NAV_TAKEOFF` |
+| 20 | `NAV_RETURN_TO_LAUNCH` |
+| 17 | `NAV_LOITER_UNLIM` |
+
+`Mission_Waypoints`와 `Mission_Cmds`는 문자열이라 merged CSV에서는 제외됩니다.
+
 ### 마이크 원본 오디오
 
 `/respeaker/audio`의 PCM 파형은 CSV에 담을 수 없어 프레임별 요약 통계만 기록합니다.
@@ -1184,6 +1219,8 @@ bash tests/virtual_uart_test.sh wcm6800
 | `esc_telemetry/*` | ESC 텔레메트리 지원 ESC 필요 |
 | `battery2` | 배터리 모니터 2번 설정 시 |
 | `anomaly/label`, `test/metadata` | 외부 발행 필요 |
+| `mission/waypoints` | 미션 업로드 시 (latched, 변경 시에만 재발행) |
+| `mission/reached` | 웨이포인트 도달 시 |
 
 ---
 

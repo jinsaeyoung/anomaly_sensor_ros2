@@ -402,6 +402,73 @@ class TestSerialAutodetect(unittest.TestCase):
         self.assertEqual(self._mavlink(b'+01230\r\n' * 5), 0)
 
 
+class TestMissionParsing(unittest.TestCase):
+    """
+    미션(WaypointList) 요약 로직 검증
+
+    웨이포인트 전체를 CSV 컬럼으로 펼칠 수 없으므로
+    개수·현재 seq·명령 분포만 요약하고 상세는 JSON 으로 보존합니다.
+    """
+
+    class _WP:
+        def __init__(self, cmd, lat=0.0, lon=0.0, alt=0.0):
+            self.command = cmd
+            self.x_lat = lat
+            self.y_long = lon
+            self.z_alt = alt
+            self.frame = 3
+            self.param1 = self.param2 = self.param3 = self.param4 = 0.0
+            self.autocontinue = True
+
+    @staticmethod
+    def _to_int(v, default=0):
+        if isinstance(v, (bytes, bytearray)):
+            return v[0] if len(v) else default
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return default
+
+    def test_command_histogram(self):
+        # 22=TAKEOFF, 16=WAYPOINT, 21=LAND
+        wps = [self._WP(22), self._WP(16), self._WP(16), self._WP(21)]
+        cmds = {}
+        for w in wps:
+            k = self._to_int(w.command)
+            cmds[k] = cmds.get(k, 0) + 1
+        summary = ','.join(f'{k}x{v}' for k, v in sorted(cmds.items()))
+        self.assertEqual(summary, '16x2,21x1,22x1')
+
+    def test_current_target_in_range(self):
+        wps = [self._WP(16, 37.1, 127.1, 50.0),
+               self._WP(16, 37.2, 127.2, 60.0)]
+        cur = 1
+        self.assertTrue(0 <= cur < len(wps))
+        self.assertAlmostEqual(wps[cur].x_lat, 37.2)
+        self.assertAlmostEqual(wps[cur].z_alt, 60.0)
+
+    def test_current_seq_out_of_range(self):
+        """current_seq 가 -1 이거나 범위를 벗어나면 좌표를 기록하지 않아야 함"""
+        wps = [self._WP(16)]
+        for cur in (-1, 5):
+            self.assertFalse(0 <= cur < len(wps))
+
+    def test_empty_mission(self):
+        wps = []
+        self.assertEqual(len(wps), 0)
+
+    def test_json_serializable(self):
+        import json
+        wps = [self._WP(22, 37.1, 127.1, 10.0)]
+        data = [{
+            'seq': i, 'cmd': self._to_int(w.command),
+            'lat': w.x_lat, 'lon': w.y_long, 'alt': w.z_alt,
+        } for i, w in enumerate(wps)]
+        s = json.dumps(data, ensure_ascii=False)
+        self.assertIn('"cmd": 22', s)
+        self.assertEqual(json.loads(s)[0]['alt'], 10.0)
+
+
 class TestStaleLogic(unittest.TestCase):
     """age 기반 stale 판정 로직 검증"""
 

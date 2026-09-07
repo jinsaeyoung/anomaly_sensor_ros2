@@ -79,6 +79,11 @@ DEFAULT_TOPICS = [
     # MAVROS: 항법 / 환경
     '/mavros/nav_controller_output/output',
     '/mavros/wind_estimation',
+    # MAVROS: 미션 / 지오펜스
+    '/mavros/mission/waypoints',
+    '/mavros/mission/reached',
+    '/mavros/rallypoint/rallypoints',
+    '/mavros/geofence/fences',
     # 라벨 / 실험 메타데이터 (외부 발행)
     '/anomaly/label',
     '/test/metadata',

@@ -89,6 +89,7 @@ EXCLUDE_FROM_MERGED = {
     'THL100_Raw', 'WCM_Raw', 'stamp_source',
     # 문자열/서술형 컬럼은 개별 CSV 에만 보존
     'StatusText', 'StatusEvent', 'Diag_Issues', 'Metadata',
+    'Mission_Waypoints', 'Mission_Cmds',
 }
 
 
@@ -457,6 +458,61 @@ def parse_msg(topic, msg):
         row['Diag_WorstLevel'] = worst
         if names:
             row['Diag_Issues'] = ','.join(names)[:150]
+
+    # ── 미션 / 지오펜스 ───────────────────────────────────────────────
+    # WaypointList 는 미션 업로드·변경 시에만 발행되는 latched 성격입니다.
+    # 웨이포인트 전체를 CSV 에 넣을 수 없으므로 요약 정보만 기록하고,
+    # 상세 경로는 개별 CSV(mission_waypoints.csv)의 JSON 컬럼에 보존합니다.
+    elif topic == '/mavros/mission/waypoints':
+        wps = getattr(msg, 'waypoints', [])
+        row['Mission_Count']   = len(wps)
+        row['Mission_Current'] = _to_int(getattr(msg, 'current_seq', -1))
+
+        if wps:
+            # 명령 종류별 개수 (이륙/착륙/웨이포인트 등 미션 성격 파악용)
+            cmds = {}
+            for w in wps:
+                cmd = _to_int(getattr(w, 'command', 0))
+                cmds[cmd] = cmds.get(cmd, 0) + 1
+            row['Mission_Cmds'] = ','.join(f'{k}x{v}' for k, v in sorted(cmds.items()))
+
+            # 현재 목표 웨이포인트의 좌표
+            cur = row['Mission_Current']
+            if 0 <= cur < len(wps):
+                w = wps[cur]
+                row['Mission_TgtLat'] = getattr(w, 'x_lat', float('nan'))
+                row['Mission_TgtLon'] = getattr(w, 'y_long', float('nan'))
+                row['Mission_TgtAlt'] = getattr(w, 'z_alt', float('nan'))
+                row['Mission_TgtCmd'] = _to_int(getattr(w, 'command', 0))
+
+            # 전체 경로 (개별 CSV 에만 보존)
+            try:
+                row['Mission_Waypoints'] = json.dumps([{
+                    'seq':     i,
+                    'cmd':     _to_int(getattr(w, 'command', 0)),
+                    'frame':   _to_int(getattr(w, 'frame', 0)),
+                    'lat':     getattr(w, 'x_lat', None),
+                    'lon':     getattr(w, 'y_long', None),
+                    'alt':     getattr(w, 'z_alt', None),
+                    'p1':      getattr(w, 'param1', None),
+                    'p2':      getattr(w, 'param2', None),
+                    'p3':      getattr(w, 'param3', None),
+                    'p4':      getattr(w, 'param4', None),
+                    'autocont': bool(getattr(w, 'autocontinue', False)),
+                } for i, w in enumerate(wps)], ensure_ascii=False)
+            except Exception:
+                pass
+
+    elif topic == '/mavros/mission/reached':
+        row['Mission_ReachedSeq'] = _to_int(getattr(msg, 'wp_seq', -1))
+
+    elif topic == '/mavros/rallypoint/rallypoints':
+        pts = getattr(msg, 'waypoints', [])
+        row['Rally_Count'] = len(pts)
+
+    elif topic == '/mavros/geofence/fences':
+        pts = getattr(msg, 'waypoints', [])
+        row['Fence_Count'] = len(pts)
 
     # ── 마이크 ────────────────────────────────────────────────────────
     elif topic == '/respeaker/doa':
