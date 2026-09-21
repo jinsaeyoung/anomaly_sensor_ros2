@@ -18,6 +18,8 @@ Winson WCM6800 전류계 UART ROS2 노드
   - 센서 수신 시각(ROS clock) 기록
 """
 
+import os
+import sys
 import threading
 import time
 import json
@@ -39,6 +41,11 @@ class WCM6800Node(Node):
         self.declare_parameter('stale_timeout_sec',   2.0)
         self.declare_parameter('reconnect_delay_sec', 2.0)
         self.declare_parameter('drain_max_sec',       3.0)
+        # 자동 재탐색 — 젠더·포트가 바뀌어도 자기 장치를 찾아갑니다
+        self.declare_parameter('autodetect',           True)
+        self.declare_parameter('device_key',           'wcm6800')
+        self.declare_parameter('identity_timeout_sec', 8.0)
+        self.declare_parameter('rediscover_interval',  10.0)
 
         self.port            = self.get_parameter('port').value
         self.baudrate        = self.get_parameter('baudrate').value
@@ -46,6 +53,15 @@ class WCM6800Node(Node):
         self.stale_sec       = self.get_parameter('stale_timeout_sec').value
         self.reconnect_delay = self.get_parameter('reconnect_delay_sec').value
         self.drain_max_sec   = self.get_parameter('drain_max_sec').value
+        self.autodetect          = bool(self.get_parameter('autodetect').value)
+        self.device_key          = self.get_parameter('device_key').value
+        self.identity_timeout    = float(self.get_parameter('identity_timeout_sec').value)
+        self.rediscover_interval = float(self.get_parameter('rediscover_interval').value)
+        self._sa = None
+        self._sa_failed = False
+        self._last_rediscover = 0.0
+        self._last_valid_mono = time.monotonic()
+        self._connect_fail = 0
 
         # ── 퍼블리셔 ──────────────────────────────────────────────────
         self.pub_data         = self.create_publisher(String,  '/wcm6800/data',         10)
@@ -82,7 +98,9 @@ class WCM6800Node(Node):
 
     def _connect(self):
         try:
+            # exclusive=True: 다른 노드·탐색 프로세스가 같은 포트를 동시에 열지 못하게 함
             self.ser = serial.Serial(
+                exclusive=True,
                 port=self.port, baudrate=self.baudrate,
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
@@ -128,6 +146,56 @@ class WCM6800Node(Node):
             self.get_logger().warn(f'시리얼 연결 실패: {e}')
             self.ser = None
             return False
+
+    # ══════════════════════════════════════════════════════════════════
+    # 포트 재탐색
+    #   USB 재삽입으로 ttyUSB 번호가 바뀌거나, 젠더를 다른 포트로 옮기면
+    #   지정 포트가 사라지거나 다른 장치의 포트가 됩니다.
+    #   이 경우 정상 패킷이 끊기므로, 비어 있는 포트를 다시 탐색해
+    #   자기 장치를 찾아갑니다. (다른 노드가 쓰는 포트는 건드리지 않음)
+    # ══════════════════════════════════════════════════════════════════
+    def _load_autodetect(self):
+        if self._sa is not None or self._sa_failed:
+            return self._sa
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            path = os.path.join(get_package_share_directory('drone_sensors'), 'scripts')
+            if path not in sys.path:
+                sys.path.insert(0, path)
+            import serial_autodetect
+            self._sa = serial_autodetect
+        except Exception as e:
+            self._sa_failed = True
+            self.get_logger().warn(f'자동 재탐색 비활성 (serial_autodetect 로드 실패: {e})')
+        return self._sa
+
+    def _rediscover(self, reason):
+        """비어 있는 포트에서 자기 장치를 찾아 self.port 를 갱신"""
+        if not self.autodetect:
+            return False
+        now = time.monotonic()
+        if now - self._last_rediscover < self.rediscover_interval:
+            return False
+        self._last_rediscover = now
+
+        sa = self._load_autodetect()
+        if sa is None:
+            return False
+
+        self.get_logger().warn(f'포트 재탐색 ({reason}) — 현재 {self.port}',
+                               throttle_duration_sec=30.0)
+        try:
+            found = sa.find_port(self.device_key, exclude_busy=True)
+        except Exception as e:
+            self.get_logger().warn(f'재탐색 오류: {e}')
+            return False
+
+        if found and found != self.port:
+            self.get_logger().info(f'장치를 새 포트에서 발견: {self.port} → {found}')
+            self.port = found
+            self._stat['rediscover'] = self._stat.get('rediscover', 0) + 1
+            return True
+        return False
 
     def _extract_packets(self, chunk):
         """
@@ -175,9 +243,17 @@ class WCM6800Node(Node):
         while not self._stop_event.is_set():
             if self.ser is None or not self.ser.is_open:
                 if not self._connect():
+                    self._connect_fail += 1
+                    # 포트가 사라졌거나 연속 실패하면 다른 포트에서 찾아봅니다
+                    if not os.path.exists(self.port) or self._connect_fail >= 3:
+                        if self._rediscover('포트 없음/연결 실패'):
+                            self._connect_fail = 0
+                            continue
                     self._stop_event.wait(self.reconnect_delay)
                     continue
                 else:
+                    self._connect_fail = 0
+                    self._last_valid_mono = time.monotonic()
                     self._stat['reconnect'] += 1
                     self._buffer = ''
 
@@ -186,6 +262,25 @@ class WCM6800Node(Node):
                 # in_waiting 이 0 일 때 read(1) 로 블로킹하면
                 # pyserial 이 "readiness to read but returned no data" 예외를
                 # 던지는 경우가 있어, 대기 후 남은 바이트를 일괄로 읽습니다.
+                # 연결은 되어 있는데 정상 패킷이 끊긴 경우:
+                #   센서 전원이 빠졌거나, 재삽입 후 이 번호가 다른 장치에 할당된 것입니다.
+                #   후자라면 계속 붙잡고 있으면 그 장치(예: FC)의 데이터를 빼앗으므로
+                #   포트를 놓고 자기 장치를 다시 찾습니다.
+                if (self.autodetect and
+                        time.monotonic() - self._last_valid_mono > self.identity_timeout):
+                    self.get_logger().warn(
+                        f'{self.identity_timeout:.0f}초간 정상 패킷 없음 — 포트를 놓고 재탐색',
+                        throttle_duration_sec=30.0)
+                    try:
+                        self.ser.close()
+                    except Exception:
+                        pass
+                    self.ser = None
+                    self._last_valid_mono = time.monotonic()
+                    self._last_rediscover = 0.0      # 즉시 재탐색 허용
+                    self._rediscover('정상 패킷 없음')
+                    continue
+
                 n = self.ser.in_waiting
                 if n:
                     chunk = self.ser.read(n)
@@ -208,6 +303,7 @@ class WCM6800Node(Node):
                         self._stat['parse_fail'] += 1
                         continue
                     self._stat['parse_ok'] += 1
+                    self._last_valid_mono = time.monotonic()
 
                     now_ns   = self.get_clock().now().nanoseconds
                     now_mono = time.monotonic()

@@ -128,7 +128,7 @@ if ! grep -q "source $WS/install/setup.bash" ~/.bashrc; then
 fi
 
 # 기존 alias 제거 후 재등록 (재실행 시 중복/구버전 방지)
-for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log service_status watch_fcu onboard_env monitor_drone extract_audio detect_serial setup_fc scan_baud; do
+for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log service_status watch_fcu onboard_env monitor_drone monitor_fast monitor_only monitor_sh fix_devices detect_fc fc_status extract_audio detect_serial scan_bags bag_log setup_fc scan_baud; do
     sed -i "/^alias ${a}=/d" ~/.bashrc
 done
 sed -i '/^# 드론 센서 편의 명령어$/d' ~/.bashrc
@@ -144,9 +144,15 @@ alias record_drone='$WS/scripts/record_data.sh'
 alias service_status='bash $WS/scripts/install_service.sh status'
 alias watch_fcu='bash $WS/scripts/watch_fcu.sh'
 alias onboard_env='bash $WS/scripts/setup_onboard_env.sh'
-alias monitor_drone='bash $WS/scripts/monitor_drone.sh'
+alias monitor_drone='python3 $WS/scripts/monitor_node.py'
+alias monitor_fast='python3 $WS/scripts/monitor_node.py --interval 1'
+alias monitor_only='python3 $WS/scripts/monitor_node.py --no-log'
+alias detect_fc='python3 $WS/scripts/serial_autodetect.py --fc'
+alias fc_status='ros2 topic echo /fcu_manager/status --once --field data'
 alias extract_audio='python3 $WS/scripts/extract_audio.py'
 alias detect_serial='python3 $WS/scripts/serial_autodetect.py'
+alias scan_bags='python3 $WS/scripts/scan_bags.py'
+alias bag_log='bash $WS/scripts/extract_bag_log.sh'
 alias analyze_drone='python3 $WS/scripts/analyze_bag.py'
 alias check_record='bash $WS/scripts/check_record.sh'
 alias onboard_log='tail -f \$HOME/anomaly_data/onboard.log'
@@ -174,9 +180,15 @@ echo ""
 echo "  service_status           — 부팅 자동실행 모드 확인"
 echo "  watch_fcu --once         — FC 연결 상태 점검"
 echo "  onboard_env check        — 온보드 환경 상태 확인"
-echo "  monitor_drone            — 실시간 모니터 (arm/녹화 상태)"
+echo "  monitor_drone            — 실시간 모니터 3초 + 로그 (기본)"
+echo "  monitor_fast             — 1초 갱신 (arm 테스트용)"
+echo "  monitor_only             — 모니터만 (로그 제외)"
+echo "  detect_fc                — FC 포트·baud·SYSID·링크 구성원 확인"
+echo "  fc_status                — mavros 관리 상태 (연결/복구/재시작 횟수)"
 echo "  extract_audio <bag경로>  — 마이크 원본 PCM 을 WAV 로 추출"
 echo "  detect_serial            — 시리얼 장치 자동 탐색 (젠더 교체 대응)"
+echo "  scan_bags                — 전체 bag 의 센서 데이터 누락 일괄 점검"
+echo "  bag_log <bag이름>        — 해당 bag 의 녹화 전후 로그 추출"
 echo ""
 echo "  ⚠️  온보드(무인) 운용 시 먼저 실행하세요:"
 echo "    bash scripts/setup_onboard_env.sh        # brltty 제거, sudo, 도메인 등"

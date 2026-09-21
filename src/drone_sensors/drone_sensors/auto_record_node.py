@@ -129,6 +129,8 @@ class AutoRecordNode(Node):
         # ── 상태 ──────────────────────────────────────────────────────
         self._proc          = None    # rosbag record 프로세스
         self._bag_path      = None
+        self._health        = None    # 최근 센서 상태 (sensor_health_node)
+        self._health_time   = None
         self._armed         = False
         self._stop_timer    = None
         self._start_time    = None
@@ -137,6 +139,8 @@ class AutoRecordNode(Node):
         self.pub_status = self.create_publisher(String, '/auto_record/status', 10)
         self.create_subscription(State,  '/mavros/state',           self._cb_state,   MAVROS_QOS)
         self.create_subscription(String, '/auto_record/command',    self._cb_command, 10)
+        # 센서 연결 상태 — 녹화 시작 시 프리플라이트 체크에 사용
+        self.create_subscription(String, '/sensor_health',          self._cb_health,  10)
 
         self.create_timer(5.0,  self._publish_status)
         self.create_timer(30.0, self._periodic_sync)
@@ -173,6 +177,17 @@ class AutoRecordNode(Node):
             )
             return False
 
+        # ── 프리플라이트 체크 ────────────────────────────────────
+        # 녹화는 막지 않습니다. FC 데이터만이라도 확보하는 편이 낫고,
+        # 센서가 늦게 붙는 경우도 있기 때문입니다.
+        # 다만 상태를 명확히 남겨 사후에 바로 판별할 수 있게 합니다.
+        ok, health, summary = self._preflight_check()
+        if ok:
+            self.get_logger().info(f'프리플라이트: {summary}')
+        else:
+            self.get_logger().warn(f'프리플라이트 경고 — {summary}')
+            self.get_logger().warn('  센서 데이터가 누락된 채 녹화됩니다.')
+
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         name  = f'{self.name_prefix}_{stamp}'
         self._bag_path = os.path.join(self.save_dir, name)
@@ -193,6 +208,7 @@ class AutoRecordNode(Node):
             self.get_logger().info(
                 f'녹화 시작 ({reason}) → {name}  [여유 {free:.1f}GB]'
             )
+            self._write_meta(name, reason, health, summary, ok)
             return True
         except Exception as e:
             self.get_logger().error(f'녹화 시작 실패: {e}')
@@ -268,6 +284,48 @@ class AutoRecordNode(Node):
             self._stop_timer = None
         self.stop_recording('disarmed')
 
+    # ── 센서 상태 수신 ────────────────────────────────────────────────
+    def _cb_health(self, msg):
+        try:
+            self._health = json.loads(msg.data)
+            self._health_time = self.get_clock().now().nanoseconds
+        except Exception:
+            pass
+
+    # ── 프리플라이트 체크 ─────────────────────────────────────────────
+    def _preflight_check(self):
+        """
+        녹화 시작 시 센서 상태를 확인하고 결과를 반환
+
+        센서가 죽은 채로 이륙하면 비행이 끝난 뒤에야 데이터 누락을
+        알게 되므로, arm 시점에 상태를 로그와 bag 메타데이터에 남깁니다.
+
+        반환: (모두정상 여부, 상태 dict, 요약 문자열)
+        """
+        if self._health is None:
+            return False, {}, 'sensor_health_node 미실행 — 센서 상태 확인 불가'
+
+        # 상태가 너무 오래되었으면 신뢰할 수 없음
+        if self._health_time is not None:
+            age = (self.get_clock().now().nanoseconds - self._health_time) / 1e9
+            if age > 15.0:
+                return False, self._health.get('groups', {}), \
+                       f'센서 상태 정보가 {age:.0f}초 전 것 — 신뢰 불가'
+
+        groups = self._health.get('groups', {})
+        bad = {g: s for g, s in groups.items() if s != 'OK'}
+
+        if not bad:
+            return True, groups, '전 센서 정상'
+
+        desc = {
+            'STALE':    '수신중단',
+            'NO_DATA':  '데이터없음',
+            'NO_TOPIC': '노드없음',
+        }
+        parts = [f'{g}({desc.get(s, s)})' for g, s in bad.items()]
+        return False, groups, '이상: ' + ', '.join(parts)
+
     # ── 수동 명령 ─────────────────────────────────────────────────────
     def _cb_command(self, msg):
         cmd = msg.data.strip().lower()
@@ -291,6 +349,7 @@ class AutoRecordNode(Node):
             'bag':       os.path.basename(self._bag_path) if recording else '',
             'elapsed_s': round(elapsed, 1),
             'free_gb':   round(self._free_gb(), 2),
+            'sensors':   (self._health or {}).get('groups', {}),
         }
         m = String(); m.data = json.dumps(payload)
         self.pub_status.publish(m)
@@ -302,6 +361,31 @@ class AutoRecordNode(Node):
                 throttle_duration_sec=30.0
             )
             self.stop_recording('디스크 부족')
+
+    # ── 녹화 메타데이터 기록 ──────────────────────────────────────────
+    def _write_meta(self, name, reason, health, summary, ok):
+        """
+        bag 폴더 옆에 녹화 시점 정보를 남깁니다.
+
+        나중에 데이터가 누락된 bag 을 발견했을 때
+        '그때 센서가 살아있었는지' 를 로그를 뒤지지 않고 바로 알 수 있습니다.
+        """
+        meta = {
+            'bag':            name,
+            'started_at':     datetime.now().isoformat(timespec='seconds'),
+            'trigger':        reason,
+            'preflight_ok':   ok,
+            'preflight':      summary,
+            'sensor_status':  health,
+            'free_gb':        round(self._free_gb(), 2),
+            'topics':         len(self.topics),
+        }
+        try:
+            path = os.path.join(self.save_dir, f'{name}_meta.json')
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.get_logger().warn(f'메타데이터 기록 실패: {e}')
 
     # ── 주기적 디스크 flush (전원 차단 대비) ──────────────────────────
     def _periodic_sync(self):

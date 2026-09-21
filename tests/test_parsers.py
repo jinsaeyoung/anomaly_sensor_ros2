@@ -469,6 +469,92 @@ class TestMissionParsing(unittest.TestCase):
         self.assertEqual(json.loads(s)[0]['alt'], 10.0)
 
 
+class TestFcSysidDetection(unittest.TestCase):
+    """
+    FC 의 SYSID 를 HEARTBEAT 로 자동 탐지하는 로직 검증
+
+    아래 바이트는 pymavlink 로 생성한 실제 MAVLink 프레임입니다.
+    CRC 를 확인하므로 잡음이나 잘못된 baud 에서는 SYSID 가 잡히지 않고,
+    같은 링크의 GCS·짐벌·컴패니언은 대상에서 제외돼야 합니다.
+    """
+
+    FC_SYS7      = bytes.fromhex('fd090000000701000000000000000203000403a76f')
+    GCS_255      = bytes.fromhex('fd09000000ffbe0000000000000006080004033d48')
+    GIMBAL_7     = bytes.fromhex('fd09000000079a000000000000001a08000403f777')
+    COMPANION_7  = bytes.fromhex('fd0900000007bf000000000000001208000403437e')
+    FC_SYS200_V1 = bytes.fromhex('fe0900c80100000000000e0300040312a8')
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util, os
+        here = os.path.dirname(os.path.abspath(__file__))
+        for cand in (os.path.join(here, '..', 'scripts', 'serial_autodetect.py'),
+                     os.path.join(here, '..', 'serial_autodetect.py')):
+            if os.path.exists(cand):
+                spec = importlib.util.spec_from_file_location('sa', cand)
+                cls.sa = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cls.sa)
+                return
+        raise unittest.SkipTest('serial_autodetect.py 없음')
+
+    def _target(self, data):
+        return self.sa.summarize_link(self.sa.parse_mavlink(data))
+
+    def test_sysid_7(self):
+        t = self._target(self.FC_SYS7)['target']
+        self.assertEqual((t['sysid'], t['compid']), (7, 1))
+
+    def test_mavlink1_sysid_200(self):
+        link = self._target(self.FC_SYS200_V1)
+        self.assertEqual(link['target']['sysid'], 200)
+        self.assertEqual(link['protocol'], 'v1.0')
+
+    def test_excludes_gcs_gimbal_companion(self):
+        data = self.GCS_255 + self.GIMBAL_7 + self.COMPANION_7 + self.FC_SYS7
+        link = self._target(data)
+        self.assertEqual(link['target']['sysid'], 7)
+        self.assertEqual(link['target']['compid'], 1)
+        self.assertEqual(len(link['others']), 3)
+
+    def test_only_non_vehicles_gives_no_target(self):
+        """GCS·짐벌만 보이면 대상이 없어야 함 (잘못 붙지 않도록)"""
+        link = self._target(self.GCS_255 + self.GIMBAL_7)
+        self.assertIsNone(link['target'])
+
+    def test_companion_compid_avoids_collision(self):
+        """기체 7 에 이미 컴패니언 191 이 있으면 mavros 는 194 를 써야 함"""
+        link = self._target(self.COMPANION_7 + self.FC_SYS7)
+        self.assertEqual(self.sa.choose_companion_compid(link, 7), 194)
+
+    def test_companion_compid_default(self):
+        link = self._target(self.FC_SYS7)
+        self.assertEqual(self.sa.choose_companion_compid(link, 7), 191)
+
+    def test_corrupted_crc_rejected(self):
+        bad = bytearray(self.FC_SYS7)
+        bad[-1] ^= 0xFF
+        self.assertIsNone(self._target(bytes(bad))['target'])
+
+    def test_noise_no_false_sysid(self):
+        import random
+        random.seed(7)
+        noise = bytes(random.randrange(256) for _ in range(20000))
+        # 과거 로그에 찍혔던 형태의 가짜 헤더(191.239)
+        noise += bytes([0xFD, 9, 0, 0, 0xAF, 191, 239, 0, 0, 0]) * 20
+        self.assertIsNone(self._target(noise)['target'])
+
+    def test_frame_inside_noise(self):
+        import random
+        random.seed(8)
+        noise = bytes(random.randrange(256) for _ in range(2000))
+        t = self._target(noise + self.FC_SYS7 + noise)['target']
+        self.assertEqual(t['sysid'], 7)
+
+    def test_sensor_data_not_mavlink(self):
+        self.assertEqual(self.sa._match_mavlink(b'@T453,1,25.1,43.5,36.6\r\n' * 50), 0)
+        self.assertEqual(self.sa._match_mavlink(b'+01230\r\n' * 100), 0)
+
+
 class TestStaleLogic(unittest.TestCase):
     """age 기반 stale 판정 로직 검증"""
 

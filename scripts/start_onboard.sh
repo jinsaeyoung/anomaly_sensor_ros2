@@ -11,7 +11,9 @@
 # 환경변수로 조정 가능:
 #   ANOMALY_WS        워크스페이스 경로
 #   ANOMALY_DATA      저장 경로
-#   FCU_URL           FC 연결 (기본: TELEM2 CH340 젠더 921600)
+#   FCU_URL           FC 연결 강제 지정 (기본: 비움 = 자동 탐지)
+#   TGT_SYSTEM        대상 기체 SYSID 강제 지정 (기본: 비움 = 자동 탐지)
+#   EXPECT_SERIAL     부팅 시 기다릴 시리얼 장치 수 (기본 0 = 개수 무관)
 #   WAIT_USB_SEC      장치 대기 최대 시간
 #   FC_STABLE_SEC     FC 장치가 끊김 없이 유지되어야 하는 시간 (기본 6초)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -24,7 +26,8 @@ WAIT_USB_SEC="${WAIT_USB_SEC:-60}"
 SAVE_DIR="${ANOMALY_DATA:-$HOME/anomaly_data}"
 
 # FC 연결 — TELEM2 + USB-TTL 젠더(CH340) 기본
-FCU_URL="${FCU_URL:-/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0:921600}"
+FCU_URL="${FCU_URL:-}"                 # 비우면 자동 탐지 (권장)
+TGT_SYSTEM="${TGT_SYSTEM:-}"           # 비우면 HEARTBEAT 로 자동 탐지
 
 mkdir -p "$SAVE_DIR"
 
@@ -48,7 +51,7 @@ log "=========================================="
 log " 온보드 데이터 수집 시작"
 log " 워크스페이스: $WS"
 log " 저장 경로:    $SAVE_DIR"
-log " FC 연결:      $FCU_URL"
+log " FC 연결:      ${FCU_URL:-자동 탐지}  SYSID: ${TGT_SYSTEM:-자동 탐지}"
 log "=========================================="
 
 # ── ROS 환경 로드 ─────────────────────────────────────────────────────
@@ -65,51 +68,58 @@ if [ ! -f "$WS/install/setup.bash" ]; then
 fi
 source "$WS/install/setup.bash"
 
-# ── FC 장치 대기 및 안정화 확인 ───────────────────────────────────────
-# 부팅 직후에는 USB 열거링이 끝나지 않아 장치가 늦게 나타납니다.
-# 또한 FC 에 전원이 인가되는 과정에서 TELEM 라인 전압이 흔들리면
-# USB-TTL 젠더가 붙었다 떨어지기를 반복(재열거링)할 수 있습니다.
-# 이때 mavros 가 먼저 포트를 열면 장치가 사라져 재연결에 실패하므로,
-# STABLE_SEC 동안 연속으로 존재할 때만 안정된 것으로 판단합니다.
-FC_DEV="${FCU_URL%%:*}"          # URL 에서 장치 경로만 추출
-STABLE_SEC="${FC_STABLE_SEC:-6}" # 이 시간만큼 끊김 없이 유지되어야 함
+# ── 시리얼 장치 대기 및 안정화 확인 ───────────────────────────────────
+# 부팅 직후에는 USB 열거가 끝나지 않아 장치가 늦게 나타나고,
+# FC 전원 인가 중에는 USB-UART 젠더가 붙었다 떨어지기를 반복할 수 있습니다.
+#
+# FCU_URL 을 지정했으면 그 장치를, 지정하지 않았으면(기본)
+# 연결된 시리얼 장치 목록 전체가 STABLE_SEC 동안 변하지 않을 때까지 기다립니다.
+# 어떤 장치가 FC/THL100/WCM6800 인지는 launch 가 데이터로 판별합니다.
+STABLE_SEC="${FC_STABLE_SEC:-6}"
+EXPECT_SERIAL="${EXPECT_SERIAL:-0}"     # 기대 장치 수 (0 = 개수 무관)
 
-log "FC 장치 대기 중: $FC_DEV"
+serial_set() { ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | sort | tr '\n' ' '; }
+
+if [ -n "$FCU_URL" ]; then
+    FC_DEV="${FCU_URL%%:*}"
+    log "FC 장치 대기 중: $FC_DEV (지정됨)"
+else
+    log "시리얼 장치 안정화 대기 (FC 는 launch 가 자동 판별)"
+fi
 log "  최대 대기 ${WAIT_USB_SEC}초 / 안정화 확인 ${STABLE_SEC}초"
 
 waited=0
 stable=0
+prev=""
 while [ $waited -lt "$WAIT_USB_SEC" ]; do
-    if [ -e "$FC_DEV" ]; then
-        stable=$((stable + 1))
-        if [ $stable -eq 1 ]; then
-            log "  장치 감지 (${waited}초) — 안정화 확인 중"
+    if [ -n "$FCU_URL" ]; then
+        [ -e "$FC_DEV" ] && cur="present" || cur=""
+    else
+        cur="$(serial_set)"
+        if [ "$EXPECT_SERIAL" -gt 0 ]; then
+            n=$(echo "$cur" | wc -w)
+            [ "$n" -lt "$EXPECT_SERIAL" ] && cur=""
         fi
-        # 1초 간격으로 STABLE_SEC 회 연속 확인되면 완료
+    fi
+
+    if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then
+        stable=$((stable + 1))
         if [ $stable -ge "$STABLE_SEC" ]; then
-            log "FC 장치 안정화 완료 (${waited}초 경과)"
+            log "장치 안정화 완료 (${waited}초 경과)"
             break
         fi
     else
-        if [ $stable -gt 0 ]; then
-            log "  장치가 사라짐 — 재열거링 감지, 안정화 카운터 초기화"
-        fi
+        [ $stable -gt 0 ] && log "  장치 목록 변동 감지 — 안정화 카운터 초기화"
         stable=0
     fi
+    prev="$cur"
     sleep 1
     waited=$((waited + 1))
 done
 
-if [ ! -e "$FC_DEV" ]; then
-    log "경고: FC 장치를 찾지 못했습니다 — 센서만 동작합니다."
-    log "      (FC 전원 인가 후 mavros 가 자동 재연결을 시도합니다)"
-    log "      연결된 장치 목록:"
-    ls -la /dev/serial/by-id/ 2>/dev/null | tail -n +4 | while read -r l; do
-        log "        $l"
-    done
-elif [ $stable -lt "$STABLE_SEC" ]; then
-    log "경고: 장치가 불안정합니다 (연속 유지 ${stable}/${STABLE_SEC}초)"
-    log "      전원/케이블 접촉을 확인하세요. 일단 진행합니다."
+if [ $stable -lt "$STABLE_SEC" ]; then
+    log "경고: 장치가 안정되지 않았습니다 — 일단 진행합니다."
+    log "      각 노드가 실행 중 스스로 재탐색하므로 나중에 연결돼도 복구됩니다."
 fi
 
 # 장치 노드 권한이 적용될 시간 확보 (udev 규칙 처리)
@@ -136,10 +146,15 @@ sleep 2
 # ── 실행 ──────────────────────────────────────────────────────────────
 log "launch 실행 (자동 녹화 활성화)"
 
-exec ros2 launch drone_sensors drone_sensor_launch.py \
-    fcu_url:="$FCU_URL" \
-    use_auto_record:=true \
-    save_dir:="$SAVE_DIR" \
-    post_disarm_sec:=10.0 \
-    max_bag_duration:=3000 \
+LAUNCH_ARGS=(
+    use_auto_record:=true
+    save_dir:="$SAVE_DIR"
+    post_disarm_sec:=10.0
+    max_bag_duration:=3000
     min_free_gb:=2.0
+)
+# 지정한 경우에만 넘깁니다. 넘기지 않으면 launch 의 자동 탐지 결과를 씁니다.
+[ -n "$FCU_URL" ]    && LAUNCH_ARGS+=( fcu_url:="$FCU_URL" )
+[ -n "$TGT_SYSTEM" ] && LAUNCH_ARGS+=( tgt_system:="$TGT_SYSTEM" )
+
+exec ros2 launch drone_sensors drone_sensor_launch.py "${LAUNCH_ARGS[@]}"

@@ -24,8 +24,11 @@ SAVE_DIR="$RUN_HOME/anomaly_data"
 
 # ── FC 연결 설정 ──────────────────────────────────────────────────────
 # TELEM2 + USB-TTL 젠더(CH340) 기본. 환경변수로 덮어쓸 수 있습니다.
-#   FCU_URL=/dev/ttyACM0:115200 bash scripts/install_service.sh
-FCU_URL="${FCU_URL:-/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0:921600}"
+#   (기본) 포트·baud·SYSID 모두 자동 탐지
+#   FCU_URL=/dev/ttyACM0:115200 bash scripts/install_service.sh   # 강제 지정
+#   TGT_SYSTEM=7 bash scripts/install_service.sh                   # 기체 지정
+FCU_URL="${FCU_URL:-}"            # 비우면 자동 탐지 (권장)
+TGT_SYSTEM="${TGT_SYSTEM:-}"      # 비우면 HEARTBEAT 로 자동 탐지
 WAIT_USB_SEC="${WAIT_USB_SEC:-60}"       # FC 장치 대기 최대 시간
 FC_STABLE_SEC="${FC_STABLE_SEC:-6}"      # FC 장치 안정화 확인 시간
 
@@ -86,7 +89,7 @@ echo " 서비스명:     $SERVICE_NAME"
 echo " 실행 사용자:  $RUN_USER"
 echo " 워크스페이스: $WS"
 echo " 저장 경로:    $SAVE_DIR"
-echo " FC 연결:      $FCU_URL"
+echo " FC 연결:      ${FCU_URL:-자동 탐지}  SYSID: ${TGT_SYSTEM:-자동 탐지}"
 echo " FC 대기:      최대 ${WAIT_USB_SEC}초 / 안정화 ${FC_STABLE_SEC}초"
 echo "=========================================="
 
@@ -143,6 +146,7 @@ Environment="PYTHONUNBUFFERED=1"
 
 # FC 연결 설정
 Environment="FCU_URL=$FCU_URL"
+Environment="TGT_SYSTEM=$TGT_SYSTEM"
 Environment="WAIT_USB_SEC=$WAIT_USB_SEC"
 Environment="FC_STABLE_SEC=$FC_STABLE_SEC"
 

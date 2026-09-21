@@ -178,6 +178,8 @@ SR2_EXT_STAT = 10    SR2_EXTRA2 = 10
 
 USB 직결이면 `SERIAL0_*`, `SR0_*`를 사용합니다.
 
+`SYSID_THISMAV`는 **바꿀 필요가 없습니다.** 2~254여도 HEARTBEAT로 자동 탐지합니다.
+
 ### 6단계 — 수동 실행 검증
 
 서비스로 등록하기 전에 직접 실행해 확인합니다.
@@ -298,7 +300,7 @@ WCM6800 (UART 수신 스레드) →  /wcm6800/data, /raw       ┘
 | `respeaker` | ReSpeaker Mic Array v3.0 DoA/VAD/Audio/Energy |
 | `thl100_sensor` | OSTSen-THL100 온습도/조도 (UART 수신 + 1Hz 발행) |
 | `wcm6800_sensor` | Winson WCM6800 전류계 (UART 수신 + 10Hz 발행) |
-| `drone_sensors` | 통합 launch 패키지 + 자동 녹화 노드(`auto_record_node`) |
+| `drone_sensors` | 통합 launch + `fcu_manager_node`(mavros 관리) · `sensor_health_node` · `auto_record_node` |
 
 ```
 anomaly_sensor_ros2/
@@ -353,6 +355,8 @@ anomaly_sensor_ros2/
 | `monitor_drone` | `monitor_drone.sh` | 실시간 모니터 (arm/녹화 전환 추적) |
 | `extract_audio` | `extract_audio.py` | 마이크 원본 PCM을 WAV로 추출 |
 | `detect_serial` | `serial_autodetect.py` | 시리얼 장치 자동 탐색 |
+| `detect_fc` | `serial_autodetect.py --fc` | FC 포트·baud·SYSID·링크 구성원 |
+| `fc_status` | `/fcu_manager/status` | mavros 관리 상태 (연결/복구/재시작) |
 
 ```bash
 start_drone                                          # 전체 실행
@@ -364,90 +368,114 @@ stop_drone
 
 ---
 
-## 장치 경로 설정
+## 장치 자동 구분과 FC 자동 연결
 
-### 자동 탐색 (기본 동작)
+**어떤 USB-UART 젠더를 어느 USB 포트에 꽂아도 됩니다.** 설치한 하드웨어마다 경로를 따로 맞출 필요가 없습니다.
 
-같은 모델의 USB-TTL 젠더를 여러 개 쓰면 `VID:PID`로 구분할 수 없고, `by-id` 경로는 젠더 개체를 교체하면 바뀝니다. 실제로 THL100과 FC 젠더가 동일 모델(PL2303)인 경우가 있어, **각 포트를 열어 수신 데이터 패턴으로 장치를 판별**합니다.
+### 장치 구분 방식
 
-| 장치 | baud | 시그니처 |
-|---|---|---|
-| THL100 | 9600 | `@`로 시작, 콤마 5필드 — `@T453,1234,25.1,43.5,36.6` |
-| WCM6800 | 9600 | `~`/`+`/`-` + 5자리 숫자 (6바이트) — `+01230` |
-| FC | 921600 | MAVLink 프레임 헤더 (`0xFD` v2 / `0xFE` v1) |
+VID:PID나 by-id 경로에 의존하지 않고, 각 포트를 열어 **수신 데이터의 형식**으로 판별합니다. 같은 모델 젠더를 여러 개 써도, 젠더를 바꿔 끼워도 구분됩니다.
 
-launch 실행 시 자동으로 수행되며, 결과가 로그에 표시됩니다.
+| 장치 | 판별 기준 |
+|---|---|
+| FC | MAVLink 프레임 **CRC 검증** + HEARTBEAT 해석 (baud·SYSID 자동) |
+| THL100 | 9600bps, `@ID,seq,temp,humi,light` |
+| WCM6800 | 9600bps, `[~+-]NNNNN` 6바이트 |
+| ReSpeaker | USB ID `2886:0018` (오디오 장치) |
 
-```
-[launch] 시리얼 자동 탐색 결과:
-[launch]   fc       → /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
-[launch]   wcm6800  → /dev/serial/by-id/usb-DIWELL_Electronics_CP2102N_...
-[launch]   thl100   → /dev/serial/by-id/usb-Prolific_Technology_Inc._...
-```
-
-탐색에 실패한 장치는 아래 기본값으로 폴백합니다. 젠더를 교체하거나 포트를 바꿔도 별도 수정이 필요 없습니다.
-
-수동으로 확인하려면:
+다른 프로세스가 이미 열고 있는 포트는 탐색에서 제외합니다. 실행 중인 노드의 포트를 열면 데이터를 빼앗아 양쪽이 모두 깨지기 때문입니다. 포트는 `exclusive` 모드로 열어 동시 점유도 막습니다.
 
 ```bash
-detect_serial              # 전체 스캔 (상세 출력)
-detect_serial --json       # JSON 출력
-detect_serial --device fc  # 특정 장치 경로만
+detect_serial     # 전체 장치 판별
+detect_fc         # FC 상세 — 포트·baud·SYSID·링크 구성원
 ```
 
 ```
-[fc] ArduPilot FC (MAVLink) @ 921600bps 탐색
-  usb-1a86_USB_Serial-if00-port0 ... 1024bytes, 일치 12회 → 확정
-
-[wcm6800] Winson WCM6800 (전류계) @ 9600bps 탐색
-  usb-DIWELL_..._-if00-port0 ... 42bytes, 일치 6회 → 확정
+  포트      : /dev/ttyUSB2
+  baud      : 921600
+  대상 기체 : SYSID 7  COMPID 1
+  프로토콜  : MAVLink v2.0
+  mavros ID : 7.191  (컴패니언 규약)
+  링크의 다른 구성원 (대상에서 제외됨):
+      255.190  GCS
+      7.154    GIMBAL
 ```
 
-자동 탐색을 끄려면:
+### 실행 중 재연결
+
+| 장치 | 방식 |
+|---|---|
+| FC | `fcu_manager_node`가 mavros를 자식 프로세스로 관리. 연결이 끊기면 mavros만 내리고 **포트·baud·SYSID를 다시 탐지**해 새 설정으로 재기동 |
+| THL100 / WCM6800 | 정상 패킷이 일정 시간(15초/8초) 끊기면 포트를 놓고 **비어 있는 포트에서 자기 장치를 다시 탐색** |
+| ReSpeaker | 장치가 없어도 노드가 대기하며 3초마다 재연결 |
+
+mavros는 시작할 때 경로와 SYSID를 고정하고 바꾸지 않습니다. USB 재삽입으로 `ttyUSB0`이 `ttyUSB2`로 바뀌거나 기체를 교체하면 스스로 복구하지 못하므로, 바깥에서 새 설정을 찾아 다시 띄워야 합니다. 이때 **센서 노드와 녹화 프로세스는 건드리지 않습니다.** rosbag은 토픽 이름으로 구독하므로 mavros가 다시 뜨면 같은 bag에 FC 데이터가 이어서 기록됩니다.
+
+UART 노드가 재삽입 후 다른 장치의 포트(예: FC)를 잡게 되는 경우도 처리합니다. 자기 형식의 패킷이 오지 않으면 그 포트를 놓아주므로, FC 관리 노드가 해당 포트를 찾아갈 수 있습니다.
 
 ```bash
-ANOMALY_AUTODETECT=0 ros2 launch drone_sensors drone_sensor_launch.py
+fc_status          # 관리 상태 (연결/복구/재시작 횟수)
 ```
+
+### SYSID 자동 탐지
+
+FC의 `SYSID_THISMAV`가 1이 아니어도(2~254) **FC를 수정하지 않고 연결됩니다.**
+
+FC는 1초마다 HEARTBEAT를 보내고, 그 안에 자신의 SYSID가 들어 있습니다. 이것을 **수신만** 해서 읽으므로 SYSID를 1부터 255까지 하나씩 시도할 필요가 없고, 탐지 과정에서 **FC로 아무것도 송신하지 않습니다.** GCS·페이로드·FC 동작에 영향을 주지 않습니다.
+
+기체를 지정하고 싶으면 인자로 고정할 수 있습니다.
+
+```bash
+ros2 launch drone_sensors drone_sensor_launch.py tgt_system:=7
+TGT_SYSTEM=7 bash scripts/install_service.sh          # 서비스 기본값
+```
+
+### GCS·페이로드·다중 기체와의 관계
+
+| 항목 | 처리 |
+|---|---|
+| **GCS** (Mission Planner 등) | HEARTBEAT `type=GCS`, `autopilot=INVALID` → 대상에서 제외 |
+| **짐벌·카메라·기타 페이로드** | `autopilot=INVALID` → 제외. 같은 기체 SYSID를 쓰더라도 compid로 구분 |
+| **다른 컴패니언 컴퓨터** | `type=ONBOARD_CONTROLLER` → 제외. 이미 compid 191을 쓰고 있으면 mavros는 194/195/196 중 빈 번호 사용 |
+| **mavros 자기 ID** | `system_id = 대상 SYSID`, `component_id = 191` — MAVLink 컴패니언 규약. GCS에는 "기체 N의 부속 장치"로 보이고 별도 기체로 오인되지 않음 |
+| **SYSID 255** | 사용하지 않음. GCS 관례 번호이며 ArduPilot `SYSID_MYGCS`(기본 255)와 겹치면 GCS 페일세이프·RC 오버라이드 판정에 영향 |
+| **다중 기체 링크** | 비행제어기 HEARTBEAT가 여러 SYSID로 보이면 가장 자주 보인 기체를 고르고 **경고**. 이 경우 `tgt_system`을 지정 권장 |
+| **MAVLink 서명(signing)** | 탐지는 되며 수신 데이터는 기록됨. 다만 mavros의 요청(파라미터 조회 등)은 FC가 거부할 수 있어 경고 표시 |
+| **MAVLink1 전용 FC** | 프레임 형식으로 판별해 `fcu_protocol=v1.0` 자동 설정 |
+
+잡음이나 잘못된 baud에서 읽은 데이터로 엉뚱한 SYSID가 잡히지 않도록 **모든 프레임의 CRC를 검증**합니다. (이전 로그의 `detected remote address 191.239` 같은 값이 이런 잡음에서 나온 것입니다)
+
+### baud 자동 탐지
+
+ArduPilot `SERIALn_BAUD`로 흔히 쓰는 값을 차례로 시도합니다.
+
+```
+921600 → 115200 → 57600 → 460800 → 230400 → 500000
+```
+
+CRC가 맞는 프레임이 나오는 속도를 채택하며, 신호 자체가 없는 포트는 첫 시도에서 바로 건너뜁니다.
+
+### 비행 중 복구
+
+기본값은 **비행 중에도 복구**합니다(`recover_while_armed=True`). mavros만 다시 띄우므로 센서 녹화는 끊기지 않고, FC 데이터가 이미 끊긴 상태라 재기동으로 잃을 것이 없기 때문입니다. mavros는 FC로 제어 명령을 보내지 않으므로 비행에도 영향이 없습니다.
+
+비행 중 재기동을 원하지 않으면 `fcu_manager_node`의 `recover_while_armed`를 `false`로 두세요. 이 경우 착륙(disarm) 후 복구합니다.
 
 ### 수동 지정
 
-자동 탐색보다 우선하며, 인자로 준 값이 그대로 사용됩니다.
+자동 탐지보다 우선합니다.
 
 ```bash
-check_usb        # 연결된 장치 확인
-
 ros2 launch drone_sensors drone_sensor_launch.py \
   fcu_url:=/dev/ttyACM0:115200 \
+  tgt_system:=3 \
   thl100_port:=/dev/ttyUSB0 \
   wcm6800_port:=/dev/ttyUSB1
 ```
 
-기본값(폴백)은 `src/drone_sensors/launch/drone_sensor_launch.py` 상단의 `DEFAULT_*` 상수입니다.
+`fcu_url`을 지정해도 연결이 끊기면 재탐지합니다. 경로를 완전히 고정하려면 `fcu_rediscover:=false`를 추가하세요. 이전 방식(launch가 mavros를 직접 실행, 자동 복구 없음)은 `fcu_managed:=false`로 쓸 수 있습니다.
 
-### 탐색이 실패하는 경우
-
-| 원인 | 확인 |
-|---|---|
-| 장치 전원 없음 | 해당 포트에서 데이터가 나오지 않음 |
-| FC TELEM 포트 비활성 | `SERIALn_PROTOCOL=2` 확인 |
-| baud 불일치 | `serial_autodetect.py`의 `DEVICE_SIGNATURES` 수정 |
-| 포트를 다른 프로세스가 점유 | `sudo lsof /dev/ttyUSB*` |
-
-### 탐색 방식
-
-포트마다 한 번씩만 순회하며, **같은 baud를 쓰는 장치는 한 번의 수신으로 함께 판별**합니다. 장치×포트 조합마다 여닫으면 느릴 뿐 아니라 잦은 open/close가 USB 재열거링을 유발할 수 있기 때문입니다.
-
-```
-/dev/ttyUSB0 → 9600 으로 열어 THL100·WCM6800 동시 검사 → 불일치
-             → 921600 으로 열어 MAVLink 검사        → 확정
-/dev/ttyUSB1 → 9600 검사 → THL100 확정 (921600 은 건너뜀)
-```
-
-포트를 닫은 뒤 `0.3초` 안정화 대기를 둡니다. 다른 baud로 열었다 닫으면 드라이버 정리에 시간이 필요한데, 이 대기가 없으면 직후 재접속에서 초기 데이터를 놓칩니다.
-
-1차 순회에서 확정되지 않은 장치는 **남은 포트에서 한 번 더 재시도**합니다.
-
-전체 소요는 조기 확정 포함 **약 8~10초**입니다. 시작 시간이 중요하면 수동 지정을 쓰세요.
+자동 탐지를 끄려면 `ANOMALY_AUTODETECT=0`을 씁니다. 이 경우 `drone_sensor_launch.py` 상단의 `DEFAULT_*` 값이 쓰이며, 각 노드가 실행 중 재탐색하므로 값이 틀려도 복구됩니다.
 
 ---
 
@@ -472,7 +500,7 @@ ros2 launch drone_sensors drone_sensor_launch.py \
   fcu_url:=/dev/ttyACM0:115200  # 다른 포트/속도로 실행
 ```
 
-기본값을 바꾸려면 `src/drone_sensors/launch/drone_sensor_launch.py` 상단의 `DEFAULT_FCU_URL`을 수정하세요.
+연결 방식과 무관하게 포트·baud·SYSID는 자동 탐지됩니다. 아래 표는 FC 측 설정 참고용입니다.
 
 ### FC 측 시리얼 설정
 
@@ -1250,6 +1278,10 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0
 |---|---|---|
 | 젠더 교체 후 `No such file or directory` | `by-id`는 젠더 개체의 시리얼 번호 기반이라 교체 시 경로가 바뀜 | 자동 탐색이 처리함(적용됨). `detect_serial`로 확인 |
 | 같은 모델 젠더 2개를 구분 못 함 | VID:PID가 동일 | 데이터 시그니처로 판별(적용됨) |
+| USB 재삽입 후 FC만 재연결 안 됨 (`reconnect failed: No such file`) | mavros가 시작 시 경로를 고정 → 번호가 바뀌면 복구 못 함 | `fcu_manager_node`가 재탐지 후 재기동 (적용됨). `fc_status`로 확인 |
+| FC가 HEARTBEAT를 보내는데 `connected: false` | FC의 SYSID가 1이 아님 (예: 2) | HEARTBEAT로 SYSID 자동 탐지 (적용됨). `detect_fc`로 확인 |
+| `detected remote address 191.239` 같은 이상한 주소 | 잘못된 baud의 잡음을 MAVLink로 오인 | CRC 검증으로 차단 (적용됨) |
+| 비행제어기 여러 대 경고 | 같은 링크에 다른 기체가 중계됨 | `tgt_system:=N`으로 대상 지정 |
 | `git clone` 시 `이미 있고 빈 디렉터리가 아닙니다` | 같은 이름의 폴더가 이미 존재 | 기존 것을 지우고 clone 하거나 `git pull`로 갱신 ([2단계](#2단계--저장소-클론-및-설치) 참고) |
 | mavros 실행 실패 (`libdiagnostic_updater.so`) | diagnostic 패키지 미설치 | `sudo apt install ros-humble-diagnostic-updater ros-humble-diagnostic-msgs` (install.sh 반영) |
 | `lsusb`엔 CH340이 보이는데 `check_usb`엔 없음 | `brltty`가 CH340을 점자 장치로 오인 | `bash scripts/setup_onboard_env.sh` 후 USB 재삽입 |

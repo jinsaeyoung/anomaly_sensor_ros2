@@ -105,7 +105,7 @@ if [ -d "$PKG_DIR" ]; then
     # package.xml 에 의존성이 없으면 자동으로 추가합니다.
     PKG_XML="$PKG_DIR/package.xml"
     if [ -f "$PKG_XML" ]; then
-        for dep in rclpy std_msgs mavros_msgs; do
+        for dep in rclpy std_msgs mavros_msgs sensor_msgs rcl_interfaces ament_index_python; do
             if ! grep -q "<depend>$dep</depend>" "$PKG_XML"; then
                 sed -i "s|</package>|  <depend>$dep</depend>\n</package>|" "$PKG_XML"
                 echo "  + package.xml 의존성 추가: $dep"
@@ -159,6 +159,8 @@ setup(
     entry_points={
         'console_scripts': [
             'auto_record_node = drone_sensors.auto_record_node:main',
+            'sensor_health_node = drone_sensors.sensor_health_node:main',
+            'fcu_manager_node = drone_sensors.fcu_manager_node:main',
         ],
     },
 )

@@ -14,5 +14,8 @@
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
   <depend>mavros_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>ament_index_python</depend>
 </package>
 

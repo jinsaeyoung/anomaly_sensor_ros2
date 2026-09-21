@@ -29,6 +29,8 @@ setup(
     entry_points={
         'console_scripts': [
             'auto_record_node = drone_sensors.auto_record_node:main',
+            'sensor_health_node = drone_sensors.sensor_health_node:main',
+            'fcu_manager_node = drone_sensors.fcu_manager_node:main',
         ],
     },
 )
