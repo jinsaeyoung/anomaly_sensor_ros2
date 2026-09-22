@@ -128,7 +128,7 @@ if ! grep -q "source $WS/install/setup.bash" ~/.bashrc; then
 fi
 
 # 기존 alias 제거 후 재등록 (재실행 시 중복/구버전 방지)
-for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log service_status watch_fcu onboard_env monitor_drone monitor_fast monitor_only monitor_sh fix_devices detect_fc fc_status extract_audio detect_serial scan_bags bag_log setup_fc scan_baud; do
+for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log service_status watch_fcu onboard_env monitor_drone monitor_fast monitor_only monitor_sh fix_devices detect_fc fc_status extract_audio detect_serial scan_bags verify_bag bag_log setup_fc scan_baud; do
     sed -i "/^alias ${a}=/d" ~/.bashrc
 done
 sed -i '/^# 드론 센서 편의 명령어$/d' ~/.bashrc
@@ -152,6 +152,7 @@ alias fc_status='bash $WS/scripts/watch_fcu.sh --once'
 alias extract_audio='python3 $WS/scripts/extract_audio.py'
 alias detect_serial='python3 $WS/scripts/serial_autodetect.py'
 alias scan_bags='python3 $WS/scripts/scan_bags.py'
+alias verify_bag='python3 $WS/scripts/verify_bag.py'
 alias bag_log='bash $WS/scripts/extract_bag_log.sh'
 alias analyze_drone='python3 $WS/scripts/analyze_bag.py'
 alias check_record='bash $WS/scripts/check_record.sh'
@@ -187,7 +188,8 @@ echo "  detect_fc                — FC 포트·baud·SYSID·링크 구성원 �
 echo "  fc_status                — mavros 관리 상태 (연결/복구/재시작 횟수)"
 echo "  extract_audio <bag경로>  — 마이크 원본 PCM 을 WAV 로 추출"
 echo "  detect_serial            — 시리얼 장치 자동 탐색 (젠더 교체 대응)"
-echo "  scan_bags                — 전체 bag 의 센서 데이터 누락 일괄 점검"
+echo "  verify_bag [bag|--all]   — 녹화 검증 (드론 판정 + 외부센서 표기)"
+echo "  scan_bags                — 전체 bag 의 센서 데이터 유무 빠른 점검"
 echo "  bag_log <bag이름>        — 해당 bag 의 녹화 전후 로그 추출"
 echo ""
 echo "  ⚠️  온보드(무인) 운용 시 먼저 실행하세요:"

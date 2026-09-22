@@ -609,6 +609,81 @@ class TestPortClaim(unittest.TestCase):
         self.assertNotIn(os.path.realpath(self.dev), self.sa.claimed_ports())
 
 
+class TestVerifyBag(unittest.TestCase):
+    """녹화 검증: 드론 판정과 외부센서 표기 규칙"""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util, os
+        here = os.path.dirname(os.path.abspath(__file__))
+        for cand in (os.path.join(here, '..', 'scripts', 'verify_bag.py'),
+                     os.path.join(here, '..', 'verify_bag.py')):
+            if os.path.exists(cand):
+                spec = importlib.util.spec_from_file_location('vb', cand)
+                cls.vb = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cls.vb)
+                return
+        raise unittest.SkipTest('verify_bag.py 없음')
+
+    T0 = 1_000_000_000_000
+
+    def _stamps(self, hz, dur, holes=()):
+        out, t = [], 0.0
+        while t < dur:
+            if not any(a <= t < b for a, b in holes):
+                out.append(int(self.T0 + t * 1e9))
+            t += 1.0 / hz
+        return out
+
+    def _stats(self, hz, dur=60, holes=(), gap=1.0, exp=None):
+        t1 = int(self.T0 + dur * 1e9)
+        return self.vb.topic_stats(self._stamps(hz, dur, holes), self.T0, t1, exp or hz, gap)
+
+    def test_normal_rate(self):
+        s = self._stats(50)
+        self.assertTrue(s['rate_ok'])
+        self.assertEqual(s['gaps'], [])
+
+    def test_gap_detected(self):
+        s = self._stats(50, holes=[(20, 23)])
+        self.assertEqual(len(s['gaps']), 1)
+        self.assertAlmostEqual(s['max_gap'], 3.0, delta=0.1)
+
+    def test_late_start_counts_as_gap(self):
+        """센서가 녹화 시작 10초 뒤에 붙으면 공백으로 잡혀야 함"""
+        s = self._stats(1, holes=[(0, 10)], gap=5.0)
+        self.assertTrue(s['gaps'] and s['gaps'][0][0] == 0.0)
+
+    def test_low_rate(self):
+        self.assertFalse(self._stats(20, exp=50)['rate_ok'])
+
+    def _drone(self, **override):
+        d = {t: self._stats(c['hz'], gap=c['gap']) for t, c in self.vb.DRONE_TOPICS.items()}
+        d.update(override)
+        return d
+
+    def test_drone_normal(self):
+        self.assertEqual(self.vb.judge_drone(self._drone())[0], '정상')
+
+    def test_drone_missing_is_bad(self):
+        empty = self.vb.topic_stats([], self.T0, int(self.T0 + 60e9), 50, 1.0)
+        self.assertEqual(self.vb.judge_drone(self._drone(**{'/mavros/imu/data': empty}))[0], '불량')
+
+    def test_drone_long_gap_is_bad(self):
+        g = self._stats(50, holes=[(10, 20)])
+        self.assertEqual(self.vb.judge_drone(self._drone(**{'/mavros/imu/data': g}))[0], '불량')
+
+    def test_drone_short_gap_is_warn(self):
+        g = self._stats(50, holes=[(10, 12)])
+        self.assertEqual(self.vb.judge_drone(self._drone(**{'/mavros/imu/data': g}))[0], '주의')
+
+    def test_sensor_states(self):
+        empty = self.vb.topic_stats([], self.T0, int(self.T0 + 60e9), 1, 5.0)
+        self.assertEqual(self.vb.judge_sensor(empty), '없음')
+        self.assertEqual(self.vb.judge_sensor(self._stats(1, holes=[(20, 40)], gap=5.0)), '부분')
+        self.assertEqual(self.vb.judge_sensor(self._stats(1, gap=5.0)), '정상')
+
+
 class TestStaleLogic(unittest.TestCase):
     """age 기반 stale 판정 로직 검증"""
 
