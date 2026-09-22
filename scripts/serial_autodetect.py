@@ -297,7 +297,45 @@ def list_serial_ports():
     return ports
 
 
-def ports_in_use():
+# ── 포트 선점 표시 ────────────────────────────────────────────────────
+# mavros 가 포트를 열기 직전의 짧은 틈에 다른 노드가 먼저 열면 데이터를 나눠 갖게 됩니다.
+# /proc 확인만으로는 '아직 안 열린' 포트를 알 수 없으므로,
+# 관리 노드가 쓰기로 정한 포트를 파일로 표시해 다른 노드가 피하게 합니다.
+# 표시한 프로세스가 죽으면 표시는 자동으로 무시됩니다.
+CLAIM_DIR = '/tmp/anomaly_sensor_claims'
+
+
+def claim_port(key, port):
+    try:
+        os.makedirs(CLAIM_DIR, exist_ok=True)
+        with open(os.path.join(CLAIM_DIR, key), 'w') as f:
+            f.write(f'{os.getpid()} {os.path.realpath(port)}\n')
+    except OSError:
+        pass
+
+
+def release_port(key):
+    try:
+        os.remove(os.path.join(CLAIM_DIR, key))
+    except OSError:
+        pass
+
+
+def claimed_ports(exclude_key=None):
+    ports = set()
+    for path in glob.glob(os.path.join(CLAIM_DIR, '*')):
+        if os.path.basename(path) == exclude_key:
+            continue
+        try:
+            pid, real = open(path).read().split()
+            os.kill(int(pid), 0)          # 표시한 프로세스가 살아 있을 때만 유효
+            ports.add(real)
+        except (OSError, ValueError):
+            continue
+    return ports
+
+
+def ports_in_use(exclude_key=None):
     """
     다른 프로세스가 열고 있는 tty 장치 (실제 경로 집합)
 
@@ -320,7 +358,7 @@ def ports_in_use():
                     used.add(os.path.realpath(target))
         except OSError:
             continue
-    return used
+    return used | claimed_ports(exclude_key)
 
 
 def _open(port, baud):

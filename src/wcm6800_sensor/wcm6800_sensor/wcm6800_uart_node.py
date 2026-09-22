@@ -35,7 +35,7 @@ class WCM6800Node(Node):
         super().__init__('wcm6800_node')
 
         # ── 파라미터 ──────────────────────────────────────────────────
-        self.declare_parameter('port',                '/dev/ttyUSB0')
+        self.declare_parameter('port',                'auto')
         self.declare_parameter('baudrate',            9600)
         self.declare_parameter('publish_rate_hz',     10.0)
         self.declare_parameter('stale_timeout_sec',   2.0)
@@ -48,6 +48,8 @@ class WCM6800Node(Node):
         self.declare_parameter('rediscover_interval',  10.0)
 
         self.port            = self.get_parameter('port').value
+        if self.port in ('', 'auto', None):
+            self.port = ''          # 미정 — 수신 스레드가 바로 재탐색
         self.baudrate        = self.get_parameter('baudrate').value
         publish_rate_hz      = self.get_parameter('publish_rate_hz').value
         self.stale_sec       = self.get_parameter('stale_timeout_sec').value
@@ -97,6 +99,9 @@ class WCM6800Node(Node):
         )
 
     def _connect(self):
+        # 포트 미정 (launch 탐지 실패) — 열지 않고 재탐색으로 넘깁니다
+        if not self.port:
+            return False
         # 다른 프로세스(mavros 등)가 이미 연 포트는 열지 않습니다.
         # mavros 는 파일 잠금을 쓰지 않아 exclusive 로도 막히지 않으므로,
         # 열어 버리면 그쪽 데이터를 빼앗아 양쪽이 모두 깨집니다.
@@ -104,7 +109,7 @@ class WCM6800Node(Node):
             sa = self._load_autodetect()
             if sa is not None:
                 try:
-                    if os.path.realpath(self.port) in sa.ports_in_use():
+                    if os.path.realpath(self.port) in sa.ports_in_use(exclude_key='wcm6800'):
                         self.get_logger().warn(
                             f'{self.port} 는 다른 프로세스가 사용 중 — 열지 않고 재탐색',
                             throttle_duration_sec=30.0)
@@ -259,7 +264,7 @@ class WCM6800Node(Node):
                 if not self._connect():
                     self._connect_fail += 1
                     # 포트가 사라졌거나 연속 실패하면 다른 포트에서 찾아봅니다
-                    if not os.path.exists(self.port) or self._connect_fail >= 3:
+                    if not self.port or not os.path.exists(self.port) or self._connect_fail >= 3:
                         if self._rediscover('포트 없음/연결 실패'):
                             self._connect_fail = 0
                             continue

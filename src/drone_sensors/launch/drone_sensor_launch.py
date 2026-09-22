@@ -40,8 +40,10 @@ from ament_index_python.packages import get_package_share_directory
 #   각 노드는 실행 중에도 스스로 재탐색하므로 이 값이 틀려도 복구됩니다.
 # ══════════════════════════════════════════════════════════════════════════════
 DEFAULT_FCU_URL      = '/dev/ttyUSB0:921600'
-DEFAULT_THL100_PORT  = '/dev/ttyUSB1'
-DEFAULT_WCM6800_PORT = '/dev/ttyUSB2'
+# 센서는 탐지에 실패하면 'auto' 로 두고 노드가 스스로 재탐색합니다.
+# 임의의 경로를 주면 그 번호가 FC 포트일 때 mavros 데이터를 빼앗을 수 있습니다.
+DEFAULT_THL100_PORT  = 'auto'
+DEFAULT_WCM6800_PORT = 'auto'
 
 
 def _autodetect():

@@ -39,6 +39,7 @@ import sys
 import json
 import glob
 import time
+import shutil
 import threading
 import unicodedata
 
@@ -75,6 +76,24 @@ def _trunc(s, width):
         if w + cw > width:
             return out + '…'
         out, w = out + ch, w + cw
+    return out
+
+
+_ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
+
+
+def _fit(line, cols):
+    """색상 코드는 폭에서 빼고, 터미널 폭을 넘으면 자릅니다 (줄바꿈 방지)"""
+    out, w, i = '', 0, 0
+    while i < len(line):
+        m = _ANSI.match(line, i)
+        if m:
+            out += m.group(0); i = m.end(); continue
+        ch = line[i]
+        cw = 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+        if w + cw > cols - 1:
+            return out + '…\x1b[0m'
+        out += ch; w += cw; i += 1
     return out
 
 
@@ -167,7 +186,14 @@ class MonitorNode(Node):
                 return
             print(self._render())
             raise SystemExit
-        sys.stdout.write('\033[H\033[J' + self._render() + '\n')
+        # 터미널 크기에 맞춰 자릅니다. 넘치면 윗줄이 스크롤백에 쌓여
+        # 같은 내용이 반복되는 것처럼 보이기 때문입니다.
+        cols, rows = shutil.get_terminal_size((100, 50))
+        lines = [_fit(l, cols) for l in self._render().split('\n')]
+        if len(lines) > rows - 1:
+            lines = lines[:rows - 2] + [f"{self.c.dim}… 창을 키우면 전체가 보입니다 "
+                                        f"({len(lines)}줄 필요 / 현재 {rows}줄){self.c.reset}"]
+        sys.stdout.write('\033[H\033[J' + '\n'.join(lines))
         sys.stdout.flush()
 
     def _render(self):
@@ -223,11 +249,14 @@ class MonitorNode(Node):
                 'RECOVERING':   f"{c.red}복구 중{c.reset}",
                 'NO_DEVICE':    f"{c.red}FC 없음{c.reset}",
             }.get(fm.get('phase'), fm.get('phase', '?'))
-            port = os.path.basename(fm.get('port') or '-')
+            # by-id 이름은 너무 길어 줄이 넘치므로 실제 장치명(ttyUSB0 등)으로 표시
+            port = os.path.basename(os.path.realpath(fm['port'])) if fm.get('port') else '-'
             o.append(f"│  {c.dim}포트 {port} @ {fm.get('baud') or '-'}   "
                      f"대상 {fm.get('tgt') or '-'}   자기ID {fm.get('self_id') or '-'}{c.reset}")
             note = f"   {c.dim}{fm['note']}{c.reset}" if fm.get('note') else ''
             o.append(f"│  관리: {phase}   재시작 {fm.get('restarts', 0)}회{note}")
+            if fm.get('restarts') and fm.get('last_restart'):
+                o.append(f"│  {c.dim}마지막 재시작 사유: {fm['last_restart']}{c.reset}")
             if len(fm.get('autopilots') or []) > 1:
                 o.append(f"│  {c.yellow}⚠ 비행제어기 여러 대 — tgt_system 지정 권장{c.reset}")
         o.append(self._bottom())
@@ -449,6 +478,12 @@ def main():
         i += 1
     interval = max(0.5, interval)
 
+    # top/htop 처럼 별도 화면을 씁니다. 종료하면 원래 터미널 내용이 그대로 돌아오고
+    # 갱신 화면이 스크롤백에 쌓이지 않습니다.
+    alt = not once and sys.stdout.isatty()
+    if alt:
+        sys.stdout.write('\033[?1049h\033[?25l'); sys.stdout.flush()
+
     rclpy.init()
     node = None
     try:
@@ -456,11 +491,12 @@ def main():
                            log_lines=log_lines, once=once, color=color)
         rclpy.spin(node)
     except (KeyboardInterrupt, SystemExit):
-        if not once:
-            print('\n모니터 종료')
+        pass
     except Exception as e:
         print(f'[ERROR] {e}')
     finally:
+        if alt:
+            sys.stdout.write('\033[?25h\033[?1049l'); sys.stdout.flush()
         if node:
             node.destroy_node()
         if rclpy.ok():

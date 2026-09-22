@@ -135,6 +135,7 @@ class FcuManagerNode(Node):
         self._connected = False
         self._armed     = False
         self._restarts  = 0
+        self._last_reason = ''
         self._phase     = 'INIT'
         self._note      = ''
         self._link      = {}       # 링크 구성원 (탐지 결과)
@@ -197,6 +198,9 @@ class FcuManagerNode(Node):
             return None
         self._phase = 'SEARCHING'
         self._note = 'FC 탐색 중'
+        # 이전에 표시해 둔 선점이 남아 있으면 자기 포트를 건너뛰게 되므로 먼저 해제
+        # (mavros 가 스스로 종료한 경우 등 _kill 을 거치지 않은 경로 대비)
+        self.sa.release_port('fc')
         try:
             info = self.sa.find_fc(exclude_busy=True)
         except Exception as e:
@@ -261,12 +265,17 @@ class FcuManagerNode(Node):
             f"mavros 기동: {cfg['port']}:{cfg['baud']}  "
             f"대상 {cfg['tgt_system']}.{cfg['tgt_component']}  "
             f"자기 ID {cfg['system_id']}.{cfg['component_id']}  ({cfg['source']})")
+        # mavros 가 포트를 열기 전에 선점 표시 — 그 사이 다른 노드가 먼저 열지 않게
+        if self.sa is not None:
+            self.sa.claim_port('fc', cfg['port'])
         try:
             # 새 세션으로 띄워 종료 시 자식까지 한 번에 정리합니다.
             self._proc = subprocess.Popen(cmd, start_new_session=True)
         except Exception as e:
             self.get_logger().error(f'mavros 실행 실패: {e}')
             self._proc = None
+            if self.sa is not None:
+                self.sa.release_port('fc')
             return False
         self._cfg = cfg
         self._spawned = time.monotonic()
@@ -278,6 +287,9 @@ class FcuManagerNode(Node):
         return True
 
     def _kill(self, reason=''):
+        # 재탐지 때 이 포트도 후보에 들어가야 하므로 선점 표시를 먼저 해제
+        if self.sa is not None:
+            self.sa.release_port('fc')
         proc, self._proc = self._proc, None
         if proc is None or proc.poll() is not None:
             return
@@ -322,6 +334,7 @@ class FcuManagerNode(Node):
             # ── 프로세스가 스스로 죽었으면 재기동 ────────────────────
             if self._proc.poll() is not None:
                 self.get_logger().warn(f'mavros 가 종료됨 (코드 {self._proc.returncode}) — 재기동')
+                self._last_reason = f'mavros 종료 (코드 {self._proc.returncode})'
                 self._proc = None
                 self._restarts += 1
                 cfg = self._cfg if not self.rediscover else None
@@ -362,6 +375,7 @@ class FcuManagerNode(Node):
             self._note = ('장치 번호 변경/분리 의심' if not port_exists
                           else 'HEARTBEAT 없음 — baud/SYSID 재확인')
             self.get_logger().warn(f'FC 복구 시작: {self._note}')
+            self._last_reason = self._note
             self._kill('재연결')
             self._restarts += 1
             cfg = None if self.rediscover else self._cfg
@@ -385,6 +399,7 @@ class FcuManagerNode(Node):
             'self_id':      f"{c.get('system_id')}.{c.get('component_id')}" if c else None,
             'protocol':     c.get('protocol'),
             'restarts':     self._restarts,
+            'last_restart': self._last_reason,
             'state_age_s':  round(st_age, 1) if st_age is not None else None,
             'autopilots':   self._link.get('autopilots', []),
             'others':       self._link.get('others', []),

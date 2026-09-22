@@ -555,6 +555,60 @@ class TestFcSysidDetection(unittest.TestCase):
         self.assertEqual(self.sa._match_mavlink(b'+01230\r\n' * 100), 0)
 
 
+class TestPortClaim(unittest.TestCase):
+    """
+    FC 포트 선점 표시
+
+    mavros 가 포트를 열기 직전의 틈에 THL100 노드 등이 먼저 열면
+    MAVLink 데이터를 나눠 가져 첫 연결이 실패합니다.
+    관리 노드가 표시한 포트는 다른 노드가 피해야 하고,
+    표시한 프로세스가 죽으면 표시는 무시돼야 합니다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util, os, tempfile
+        here = os.path.dirname(os.path.abspath(__file__))
+        for cand in (os.path.join(here, '..', 'scripts', 'serial_autodetect.py'),
+                     os.path.join(here, '..', 'serial_autodetect.py')):
+            if os.path.exists(cand):
+                spec = importlib.util.spec_from_file_location('sa_claim', cand)
+                cls.sa = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cls.sa)
+                break
+        else:
+            raise unittest.SkipTest('serial_autodetect.py 없음')
+        cls.sa.CLAIM_DIR = tempfile.mkdtemp()
+        cls.dev = os.path.join(tempfile.mkdtemp(), 'ttyUSB9')
+        open(cls.dev, 'w').close()
+
+    def tearDown(self):
+        self.sa.release_port('fc')
+
+    def test_claim_visible_to_others(self):
+        import os
+        self.sa.claim_port('fc', self.dev)
+        self.assertIn(os.path.realpath(self.dev), self.sa.claimed_ports(exclude_key='thl100'))
+
+    def test_own_claim_excluded(self):
+        import os
+        self.sa.claim_port('fc', self.dev)
+        self.assertNotIn(os.path.realpath(self.dev), self.sa.claimed_ports(exclude_key='fc'))
+
+    def test_release(self):
+        import os
+        self.sa.claim_port('fc', self.dev)
+        self.sa.release_port('fc')
+        self.assertNotIn(os.path.realpath(self.dev), self.sa.claimed_ports())
+
+    def test_dead_owner_ignored(self):
+        import os, subprocess
+        p = subprocess.Popen(['true']); p.wait()
+        with open(os.path.join(self.sa.CLAIM_DIR, 'fc'), 'w') as f:
+            f.write(f'{p.pid} {os.path.realpath(self.dev)}\n')
+        self.assertNotIn(os.path.realpath(self.dev), self.sa.claimed_ports())
+
+
 class TestStaleLogic(unittest.TestCase):
     """age 기반 stale 판정 로직 검증"""
 

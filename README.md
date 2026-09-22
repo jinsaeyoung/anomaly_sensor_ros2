@@ -394,6 +394,10 @@ VID:PID나 by-id 경로에 의존하지 않고, 각 포트를 열어 **수신 �
 
 다른 프로세스가 이미 열고 있는 포트는 탐색에서 제외합니다. 실행 중인 노드의 포트를 열면 데이터를 빼앗아 양쪽이 모두 깨지기 때문입니다. 포트는 `exclusive` 모드로 열어 동시 점유도 막습니다.
 
+관리 노드는 mavros를 띄우기 **직전에** FC 포트를 선점 표시(`/tmp/anomaly_sensor_claims/`)합니다. mavros가 포트를 열기까지의 짧은 틈에 다른 노드가 먼저 열면 HEARTBEAT를 놓쳐 첫 연결이 실패하기 때문입니다. 표시한 프로세스가 죽으면 표시는 자동으로 무시됩니다.
+
+센서 탐지에 실패하면 임의의 경로를 넣지 않고 `auto`로 두어 노드가 바로 재탐색합니다. 추측한 경로가 FC 포트와 겹치면 mavros 데이터를 빼앗을 수 있기 때문입니다.
+
 ```bash
 detect_serial     # 전체 장치 판별
 detect_fc         # FC 상세 — 포트·baud·SYSID·링크 구성원
@@ -738,6 +742,8 @@ monitor_drone --once       # 1회 출력
 | 센서 연결 | 네 센서의 상태와 실측 Hz (`sensor_health_node` 5초 주기) |
 | 최근 로그 | 의미 있는 이벤트 6줄. **최근 10분 이내만** 표시해 옛 로그가 섞이지 않음 |
 | 최근 녹화 3건 | 시각·크기·녹화 시작 시 프리플라이트 결과 |
+
+top/htop처럼 **별도 화면**을 쓰므로 갱신 내용이 스크롤백에 쌓이지 않고, 종료하면 원래 터미널 내용이 돌아옵니다. 터미널 크기에 맞춰 줄을 자르며, 창이 전체를 담기에 작으면 아래쪽에 안내가 표시됩니다(전체 약 40줄). 관리 노드가 mavros를 재시작한 적이 있으면 마지막 사유를 함께 보여줍니다.
 
 모니터는 저주기 상태 토픽 4개만 구독하는 상주 노드라 부하가 거의 없습니다. 센서 Hz는 `sensor_health_node`가 계산한 값을 받아 쓰므로 모니터가 50Hz 토픽을 직접 구독하지 않습니다.
 
@@ -1340,6 +1346,8 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0
 | FC가 HEARTBEAT를 보내는데 `connected: false` | FC의 SYSID가 1이 아님 (예: 2) | HEARTBEAT로 SYSID 자동 탐지 (적용됨). `detect_fc`로 확인 |
 | `detected remote address 191.239` 같은 이상한 주소 | 잘못된 baud의 잡음을 MAVLink로 오인 | CRC 검증으로 차단 (적용됨) |
 | 비행제어기 여러 대 경고 | 같은 링크에 다른 기체가 중계됨 | `tgt_system:=N`으로 대상 지정 |
+| 첫 연결인데 `재시작 1회` | 센서 노드가 추측한 폴백 경로로 FC 포트를 먼저 열어 HEARTBEAT를 나눠 가짐 | FC 포트 선점 표시 + 센서 폴백 `auto` (적용됨). 모니터의 '마지막 재시작 사유' 확인 |
+| 모니터 윗부분이 반복돼 보임 | 창보다 화면이 길어 넘친 줄이 스크롤백에 쌓임 | 별도 화면 사용 + 크기 맞춤 (적용됨). 창을 40줄 이상으로 |
 | `git clone` 시 `이미 있고 빈 디렉터리가 아닙니다` | 같은 이름의 폴더가 이미 존재 | 기존 것을 지우고 clone 하거나 `git pull`로 갱신 ([2단계](#2단계--저장소-클론-및-설치) 참고) |
 | mavros 실행 실패 (`libdiagnostic_updater.so`) | diagnostic 패키지 미설치 | `sudo apt install ros-humble-diagnostic-updater ros-humble-diagnostic-msgs` (install.sh 반영) |
 | `lsusb`엔 CH340이 보이는데 `check_usb`엔 없음 | `brltty`가 CH340을 점자 장치로 오인 | `bash scripts/setup_onboard_env.sh` 후 USB 재삽입 |
