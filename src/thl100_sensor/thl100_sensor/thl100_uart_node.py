@@ -108,6 +108,20 @@ class THL100Node(Node):
 
     # ── 시리얼 연결/재연결 ────────────────────────────────────────────
     def _connect(self):
+        # 다른 프로세스(mavros 등)가 이미 연 포트는 열지 않습니다.
+        # mavros 는 파일 잠금을 쓰지 않아 exclusive 로도 막히지 않으므로,
+        # 열어 버리면 그쪽 데이터를 빼앗아 양쪽이 모두 깨집니다.
+        if self.autodetect:
+            sa = self._load_autodetect()
+            if sa is not None:
+                try:
+                    if os.path.realpath(self.port) in sa.ports_in_use():
+                        self.get_logger().warn(
+                            f'{self.port} 는 다른 프로세스가 사용 중 — 열지 않고 재탐색',
+                            throttle_duration_sec=30.0)
+                        return False
+                except Exception:
+                    pass
         try:
             # exclusive=True: 다른 노드·탐색 프로세스가 같은 포트를 동시에 열지 못하게 함
             self.ser = serial.Serial(

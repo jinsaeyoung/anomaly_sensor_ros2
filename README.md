@@ -191,7 +191,7 @@ ros2 launch drone_sensors drone_sensor_launch.py use_auto_record:=true
 새 터미널에서 상태를 봅니다.
 
 ```bash
-monitor_drone --full --once
+monitor_drone --once
 ```
 
 ```
@@ -305,27 +305,34 @@ WCM6800 (UART 수신 스레드) →  /wcm6800/data, /raw       ┘
 ```
 anomaly_sensor_ros2/
 ├── src/
-│   ├── respeaker/
-│   ├── thl100_sensor/
-│   ├── wcm6800_sensor/
+│   ├── respeaker/respeaker/respeaker_full_node.py      # 마이크 (장치 대기·재연결)
+│   ├── thl100_sensor/thl100_sensor/thl100_uart_node.py # 온습도/조도 (포트 재탐색)
+│   ├── wcm6800_sensor/wcm6800_sensor/wcm6800_uart_node.py # 전류계 (포트 재탐색)
 │   └── drone_sensors/
 │       ├── launch/drone_sensor_launch.py
-│       └── config/apm_pluginlists.yaml   # mavros 플러그인 (vibration 활성화)
+│       ├── config/apm_pluginlists.yaml   # mavros 플러그인 (vibration 활성화)
+│       └── drone_sensors/
+│           ├── fcu_manager_node.py       # mavros 기동·감시·재연결 (포트/baud/SYSID)
+│           ├── sensor_health_node.py     # 센서 상태 5초 주기 발행
+│           └── auto_record_node.py       # arm/disarm 자동 녹화
 ├── scripts/
+│   ├── serial_autodetect.py   # 장치 판별 (데이터 형식 + MAVLink CRC/HEARTBEAT)
+│   ├── monitor_node.py        # 실시간 모니터 (monitor_drone)
 │   ├── record_data.sh         # rosbag 수동 녹화
 │   ├── analyze_bag.py         # CSV 변환 + 10Hz 정렬 + 그래프
-│   ├── check_time_sync.sh     # 시간 동기화 확인
+│   ├── extract_audio.py       # 마이크 원본 PCM → WAV
+│   ├── scan_bags.py           # 전체 bag 센서 누락 일괄 점검
+│   ├── diagnose_bags.sh       # 누락 bag 원인 분류 (세션별)
+│   ├── extract_bag_log.sh     # 특정 bag 전후 로그 추출
 │   ├── start_onboard.sh       # 온보드 자동 실행 (systemd 호출)
 │   ├── install_service.sh     # 부팅 자동 실행 서비스 등록
-│   ├── check_record.sh        # 자동 녹화 상태 점검
-│   ├── guard_service.sh       # 수동 실행 시 서비스 충돌 방지
-│   ├── watch_fcu.sh           # FC 연결 감시 / 자동 복구
 │   ├── setup_onboard_env.sh   # 온보드 환경 일괄 설정
-│   ├── monitor_drone.sh       # 실시간 모니터 (arm/녹화 상태)
-│   ├── extract_audio.py       # 마이크 원본 PCM → WAV 추출
-│   └── serial_autodetect.py   # 시리얼 장치 자동 탐색
+│   ├── check_record.sh        # 자동 녹화 상태 점검
+│   ├── check_time_sync.sh     # 시간 동기화 확인
+│   ├── guard_service.sh       # 수동 실행 시 서비스 충돌 방지
+│   └── watch_fcu.sh           # FC 관리 상태 확인 (읽기 전용)
 ├── tests/
-│   ├── test_parsers.py        # 파서/좌표변환 단위 테스트
+│   ├── test_parsers.py        # 파서·SYSID 탐지·좌표변환 단위 테스트
 │   └── virtual_uart_test.sh   # 가상 UART 통합 테스트
 ├── fix_packaging.sh           # ROS2 패키지 구조 표준화
 ├── install.sh                 # 전체 환경 자동 설치
@@ -350,9 +357,11 @@ anomaly_sensor_ros2/
 | `check_record` | `scripts/check_record.sh` | 자동 녹화/서비스 상태 점검 |
 | `onboard_log` | `tail -f ~/anomaly_data/onboard.log` | 온보드 실행 로그 확인 |
 | `service_status` | `install_service.sh status` | 부팅 자동실행 모드 확인 |
-| `watch_fcu` | `watch_fcu.sh` | FC 연결 감시 / 상태 점검 |
+| `watch_fcu` | `watch_fcu.sh` | FC 관리 상태 확인 (읽기 전용) |
 | `onboard_env` | `setup_onboard_env.sh` | 온보드 환경 설정 / 상태 확인 |
-| `monitor_drone` | `monitor_drone.sh` | 실시간 모니터 (arm/녹화 전환 추적) |
+| `monitor_drone` | `monitor_node.py` | 실시간 모니터 (3초) — FC·녹화·센서·로그·최근 녹화 |
+| `monitor_fast` | `monitor_node.py --interval 1` | 1초 갱신 (arm 테스트) |
+| `monitor_only` | `monitor_node.py --no-log` | 로그 섹션 제외 |
 | `extract_audio` | `extract_audio.py` | 마이크 원본 PCM을 WAV로 추출 |
 | `detect_serial` | `serial_autodetect.py` | 시리얼 장치 자동 탐색 |
 | `detect_fc` | `serial_autodetect.py --fc` | FC 포트·baud·SYSID·링크 구성원 |
@@ -483,13 +492,13 @@ ros2 launch drone_sensors drone_sensor_launch.py \
 
 ### 연결 방식
 
-기본값은 **TELEM2 + USB-TTL 젠더(CH340)** 구성입니다.
+TELEM 포트에 **어떤 USB-UART 젠더(CH340·PL2303·CP2102 등)든** 연결할 수 있고, USB 직결도 됩니다. 포트·baud·SYSID는 자동 탐지됩니다.
 
-| 연결 | 장치 예시 | baud | SR 파라미터 |
-|---|---|---|---|
-| **TELEM2** (기본) | `usb-1a86_USB_Serial-if00-port0` | 921600 | `SR2_*` |
-| TELEM1 | 동일 젠더 | 57600 | `SR1_*` |
-| USB 직결 | `usb-Hex_ProfiCNC_CubeOrange_...-if00` | 115200 | `SR0_*` |
+| 연결 | 일반적인 baud | SR 파라미터 |
+|---|---|---|
+| **TELEM2** (권장) | 921600 | `SR2_*` |
+| TELEM1 | 57600 | `SR1_*` |
+| USB 직결 | 115200 | `SR0_*` |
 
 **포트가 바뀌면 SR 파라미터 접두어도 바뀝니다.** USB로 `SR0_*`를 설정해두고 TELEM2로 옮기면 데이터가 오지 않으니 `SR2_*`를 다시 설정해야 합니다.
 
@@ -594,12 +603,12 @@ done
 
 ### baud rate 확인
 
-연결이 안 될 때 어떤 속도에서 MAVLink가 오는지 확인하는 방법입니다.
+보통은 `detect_fc`가 자동으로 찾습니다. 그래도 안 될 때 어떤 속도에서 신호가 오는지 직접 확인하는 방법입니다.
 
 ```bash
 python3 -c "
 import serial, time
-PORT='/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0'
+PORT='/dev/ttyUSB0'          # ls /dev/ttyUSB* 로 확인한 경로
 for b in (921600, 460800, 115200, 57600, 38400, 19200, 9600):
     try:
         s = serial.Serial(PORT, b, timeout=2)
@@ -684,29 +693,55 @@ armed → disarmed   : post_disarm_sec(기본 10초) 후 종료
 
 ### 실시간 모니터링
 
+터미널 하나로 상태와 로그를 함께 봅니다.
+
 ```bash
-monitor_drone            # 기본 (약 10초 갱신)
-monitor_drone 20         # 20초 갱신
-monitor_drone --full     # 토픽 주기 포함 (약 18초 갱신)
-monitor_drone --once     # 1회 출력
-monitor_drone --debug    # 도메인/노드 수 진단 표시
+monitor_drone              # 3초 갱신 (기본)
+monitor_fast               # 1초 갱신 (arm 테스트)
+monitor_drone --interval 5 # 5초 갱신 (장시간 방치)
+monitor_drone --log 10     # 로그 10줄
+monitor_only               # 로그 섹션 제외
+monitor_drone --once       # 1회 출력
 ```
 
 ```
-┌─ FC 상태 ─────────────────────────────────────────────
-│  연결: 연결됨    상태: >>> ARMED <<<     모드: STABILIZE
-└───────────────────────────────────────────────────────
-
-┌─ 녹화 상태 ───────────────────────────────────────────
-│  ●  녹화 중        경과: 42.5초
-│     파일: flight_20260801_190312
+┌─ FC 상태 ──────────────────────────────────────────────
+│  연결: 연결됨   상태: >>> ARMED <<<   모드: STABILIZE
+│  포트 ttyUSB2 @ 921600   대상 1.1   자기ID 1.191
+│  관리: 연결 유지   재시작 0회
+└───────────────────────────────────────────────────────────
+┌─ 녹화 상태 ────────────────────────────────────────────
+│  ●  녹화 중        경과: 42초
+│     파일: flight_20260921_190312
 │     디스크 여유: 392.9 GB
-└───────────────────────────────────────────────────────
+└───────────────────────────────────────────────────────────
+┌─ 센서 연결 ────────────────────────────────────────────
+│  ● FC         정상           49.9Hz
+│  ● ReSpeaker  정상           31.2Hz
+│  ● THL100     정상            1.0Hz
+│  ● WCM6800    정상           10.0Hz
+└───────────────────────────────────────────────────────────
+┌─ 최근 로그 (onboard.log) ──────────────────────────────
+│ 19:03:12 [auto_record_node]: 프리플라이트: 전 센서 정상
+│ 19:03:12 [auto_record_node]: 녹화 시작 (armed) → flight_...
+└───────────────────────────────────────────────────────────
+┌─ 최근 녹화 3건 ─────────────────────────────────────────
+│  09-21 19:03  flight_20260921_190312      412.3MB  프리플라이트 OK
+│  09-21 18:40  flight_20260921_184002      388.1MB  프리플라이트 경고
+└───────────────────────────────────────────────────────────
 ```
 
-갱신 주기가 수 초 단위인 이유는 `ros2 topic echo/hz`가 호출마다 새 노드를 만들어 DDS discovery를 거치기 때문입니다. 특히 `ros2 topic hz`는 `average rate` 출력에 메시지 2개가 필요해, 1Hz 토픽(`/thl100/data`)은 최소 2초가 걸립니다. 조회는 병렬로 처리해 전체 시간을 줄였습니다.
+| 섹션 | 내용 |
+|---|---|
+| FC 상태 | 연결·arm·모드, 관리 노드가 잡은 포트·baud·SYSID, 복구 횟수 |
+| 녹화 상태 | 녹화 여부·경과·파일·디스크 여유 |
+| 센서 연결 | 네 센서의 상태와 실측 Hz (`sensor_health_node` 5초 주기) |
+| 최근 로그 | 의미 있는 이벤트 6줄. **최근 10분 이내만** 표시해 옛 로그가 섞이지 않음 |
+| 최근 녹화 3건 | 시각·크기·녹화 시작 시 프리플라이트 결과 |
 
-`ros2 daemon`이 죽어 노드가 0개로 조회되면 자동으로 재시작합니다. 이 데몬은 CLI 조회용 캐시일 뿐이라 **죽어도 녹화와 노드 통신은 정상 동작**합니다.
+모니터는 저주기 상태 토픽 4개만 구독하는 상주 노드라 부하가 거의 없습니다. 센서 Hz는 `sensor_health_node`가 계산한 값을 받아 쓰므로 모니터가 50Hz 토픽을 직접 구독하지 않습니다.
+
+로그는 서비스로 실행 중이면 `onboard.log`에서, 수동 실행(`ros2 launch`)이면 각 노드가 남기는 `~/.ros/log/*.log`에서 읽습니다.
 
 전환 순간의 로그를 함께 보려면 다른 터미널에서 실행하세요.
 
@@ -820,15 +855,21 @@ link[1000] reconnect failed: DeviceError:serial:open: No such file or directory
 
 USB를 손으로 뽑았다 꽂으면 정상 동작하는 것이 이 현상의 특징입니다.
 
-`start_onboard.sh`는 장치가 나타나도 바로 진행하지 않고, **`FC_STABLE_SEC`(기본 6초) 동안 끊김 없이 유지될 때만** mavros를 실행합니다.
+`start_onboard.sh`는 **연결된 시리얼 장치 목록이 `FC_STABLE_SEC`(기본 6초) 동안 변하지 않을 때까지** 기다린 뒤 launch를 실행합니다. 어느 장치가 FC인지는 launch가 데이터로 판별합니다.
 
 ```
-FC 장치 대기 중: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
-  최대 대기 90초 / 안정화 확인 8초
-  장치 감지 (4초) — 안정화 확인 중
-  장치가 사라짐 — 재열거링 감지, 안정화 카운터 초기화
-  장치 감지 (11초) — 안정화 확인 중
-FC 장치 안정화 완료 (17초 경과)
+시리얼 장치 안정화 대기 (FC 는 launch 가 자동 판별)
+  최대 대기 90초 / 안정화 확인 6초
+  장치 목록 변동 감지 — 안정화 카운터 초기화
+장치 안정화 완료 (14초 경과)
+```
+
+기다린 뒤에도 FC가 늦게 붙거나 다시 끊기면 `fcu_manager_node`가 재탐지해 연결합니다.
+
+기대하는 장치 수를 지정하면 그 수가 모일 때까지 기다립니다.
+
+```bash
+EXPECT_SERIAL=3 bash scripts/install_service.sh     # FC + THL100 + WCM6800
 ```
 
 전원 인가가 더 불안정하면 값을 늘리세요.
@@ -839,19 +880,36 @@ FC_STABLE_SEC=15 WAIT_USB_SEC=120 bash scripts/install_service.sh
 
 ### FC 연결 감시 및 자동 복구
 
-비행 중 젠더 접촉 불량 등으로 연결이 끊길 수 있습니다. `watch_fcu.sh`가 주기적으로 점검하고 필요 시 서비스를 재시작합니다.
+`fcu_manager_node`가 자동으로 처리합니다. 연결이 끊기면 **mavros만** 내리고 포트·baud·SYSID를 재탐지해 다시 띄우며, 센서 노드와 녹화는 끊기지 않습니다. 자세한 내용은 [장치 자동 구분과 FC 자동 연결](#장치-자동-구분과-fc-자동-연결)을 참고하세요.
 
 ```bash
-watch_fcu --once          # 1회 점검
-bash scripts/watch_fcu.sh # 상시 감시 (포그라운드)
+fc_status          # 관리 상태 1회
+watch_fcu          # 5초마다 갱신 (읽기 전용)
 ```
 
-| 상태 | 동작 |
+`watch_fcu`는 상태만 보여줍니다. 예전 버전은 서비스 전체를 재시작했는데, 관리 노드와 겹치면 녹화까지 끊기므로 복구 기능을 제거했습니다.
+
+### 비행별 기록 파일
+
+녹화마다 bag 폴더 옆에 두 파일이 함께 생깁니다.
+
+```
+~/anomaly_data/
+├── flight_20260921_190312/            rosbag
+├── flight_20260921_190312_meta.json   녹화 조건·센서 상태
+└── flight_20260921_190312_record.log  rosbag 출력 + 녹화 중 센서 이벤트
+```
+
+`_meta.json`은 녹화 시작과 종료 때 갱신됩니다.
+
+| 항목 | 내용 |
 |---|---|
-| 연결 정상 | 아무것도 안 함 |
-| 장치 자체가 없음 | 재시작 보류 (FC 전원 대기로 판단) |
-| 장치는 있으나 미연결 3회 연속 | 서비스 재시작 |
-| **녹화 중** | 재시작 보류 (데이터 손실 방지) |
+| `preflight_ok`, `preflight` | 녹화 시작 시 센서 상태 |
+| `sensor_events` | **녹화 중 센서 상태 변화** (예: 120초에 THL100 OK → STALE) |
+| `sensors_ok_throughout` | 시작부터 종료까지 전 센서가 정상이었는지 |
+| `duration_s`, `stop_reason`, `ended_at` | 녹화 길이와 종료 사유 |
+
+서비스와 노드는 살아 있는데 데이터만 멈춘 경우도 `sensor_events`에 남으므로, 비행 후 이 파일만 보면 해당 bag을 학습에 쓸 수 있는지 판단할 수 있습니다.
 
 ### 로그 관리
 

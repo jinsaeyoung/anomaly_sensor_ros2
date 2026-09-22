@@ -32,8 +32,10 @@ echo ""
 # 각 세션마다 ReSpeaker·시리얼 초기화 결과가 달라지므로
 # 세션 경계를 찾아 그 안에서 상태를 판정합니다.
 echo "── 세션(launch 시작) 목록 ────────────────"
+# launch 1회 = 세션 1개. mavros 는 이제 fcu_manager_node 가 띄우므로
+# 관리 노드(신규) 또는 mavros_node(구버전 로그)의 시작 줄로 세션을 구분합니다.
 grep -an "process started with pid" "$LOG" \
-  | grep -a "mavros_node" \
+  | grep -aE "fcu_manager_node|mavros_node" \
   | awk -F: '{print $1}' > /tmp/_sessions.txt
 echo "  세션 수: $(wc -l < /tmp/_sessions.txt)"
 echo ""

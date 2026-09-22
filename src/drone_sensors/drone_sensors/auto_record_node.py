@@ -23,6 +23,7 @@ import json
 import shutil
 import signal
 import subprocess
+import time
 from datetime import datetime
 
 import rclpy
@@ -113,6 +114,9 @@ class AutoRecordNode(Node):
         self.declare_parameter('post_disarm_sec',   10.0)
         self.declare_parameter('min_free_gb',       2.0)
         self.declare_parameter('max_bag_duration',  3000)    # 0이면 분할 안 함
+        # FC 링크가 끊긴 채 이 시간이 지나면 녹화 종료 (추락·전원 차단 대비)
+        # 그 전까지는 arm 상태를 알 수 없으므로 녹화를 유지합니다.
+        self.declare_parameter('link_loss_stop_sec', 120.0)
         self.declare_parameter('topics',            DEFAULT_TOPICS)
         self.declare_parameter('name_prefix',       'flight')
 
@@ -121,6 +125,7 @@ class AutoRecordNode(Node):
         self.post_disarm_sec = self.get_parameter('post_disarm_sec').value
         self.min_free_gb     = self.get_parameter('min_free_gb').value
         self.max_bag_dur     = self.get_parameter('max_bag_duration').value
+        self.link_loss_stop  = float(self.get_parameter('link_loss_stop_sec').value)
         self.topics          = list(self.get_parameter('topics').value)
         self.name_prefix     = self.get_parameter('name_prefix').value
 
@@ -131,6 +136,14 @@ class AutoRecordNode(Node):
         self._bag_path      = None
         self._health        = None    # 최근 센서 상태 (sensor_health_node)
         self._health_time   = None
+        self._rec_log_fh    = None    # 비행별 녹화 로그 파일
+        self._meta          = None    # 현재 녹화 메타데이터
+        self._meta_path     = None
+        self._events        = []      # 녹화 중 센서 상태 변화
+        self._prev_groups   = {}
+        self._fc_connected  = False
+        self._last_state_mono = None
+        self._link_lost_since = None
         self._armed         = False
         self._stop_timer    = None
         self._start_time    = None
@@ -141,6 +154,7 @@ class AutoRecordNode(Node):
         self.create_subscription(String, '/auto_record/command',    self._cb_command, 10)
         # 센서 연결 상태 — 녹화 시작 시 프리플라이트 체크에 사용
         self.create_subscription(String, '/sensor_health',          self._cb_health,  10)
+        self.create_timer(5.0, self._link_watch)
 
         self.create_timer(5.0,  self._publish_status)
         self.create_timer(30.0, self._periodic_sync)
@@ -197,22 +211,38 @@ class AutoRecordNode(Node):
             cmd += ['--max-bag-duration', str(self.max_bag_dur)]
         cmd += self.topics
 
+        # 비행별 녹화 로그 — rosbag 의 구독·경고·오류 메시지를 bag 옆에 보관합니다.
+        # 나중에 해당 비행의 데이터 문제를 추적할 때 이 파일만 보면 됩니다.
+        log_path = os.path.join(self.save_dir, f'{name}_record.log')
         try:
+            self._rec_log_fh = open(log_path, 'a', encoding='utf-8', buffering=1)
+            self._rec_log_fh.write(
+                f'# {datetime.now().isoformat(timespec="seconds")} 녹화 시작 ({reason})\n'
+                f'# 프리플라이트: {summary}\n')
+        except Exception as e:
+            self.get_logger().warn(f'녹화 로그 파일 생성 실패: {e}')
+            self._rec_log_fh = None
+
+        try:
+            out = self._rec_log_fh if self._rec_log_fh else subprocess.DEVNULL
             self._proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=out,
+                stderr=subprocess.STDOUT,
                 preexec_fn=os.setsid,   # 프로세스 그룹 분리 → SIGINT 전달용
             )
             self._start_time = self.get_clock().now()
             self.get_logger().info(
                 f'녹화 시작 ({reason}) → {name}  [여유 {free:.1f}GB]'
             )
+            self._events = []
+            self._prev_groups = dict(health or {})
             self._write_meta(name, reason, health, summary, ok)
             return True
         except Exception as e:
             self.get_logger().error(f'녹화 시작 실패: {e}')
             self._proc = None
+            self._close_rec_log()
             return False
 
     # ── 녹화 종료 ─────────────────────────────────────────────────────
@@ -247,12 +277,56 @@ class AutoRecordNode(Node):
             f'녹화 종료 ({reason}) — {os.path.basename(self._bag_path or "")} '
             f'[{dur:.1f}초, 여유 {self._free_gb():.1f}GB]'
         )
+
+        # 종료 결과를 메타에 기록 — 비행 중 센서가 한 번이라도 이상했는지 바로 알 수 있게
+        final = (self._health or {}).get('groups', {})
+        self._update_meta(
+            ended_at=datetime.now().isoformat(timespec='seconds'),
+            duration_s=round(dur, 1),
+            stop_reason=reason,
+            rosbag_exit=self._proc.returncode if self._proc else None,
+            sensor_status_end=final,
+            sensor_events=self._events,
+            sensors_ok_throughout=(not self._events and
+                                   bool((self._meta or {}).get('preflight_ok'))),
+        )
+        if self._rec_log_fh:
+            try:
+                self._rec_log_fh.write(
+                    f'# {datetime.now().isoformat(timespec="seconds")} 녹화 종료 '
+                    f'({reason}, {dur:.1f}초, 센서 이벤트 {len(self._events)}건)\n')
+            except Exception:
+                pass
+        self._close_rec_log()
+
         self._proc       = None
         self._start_time = None
         return True
 
+    def _close_rec_log(self):
+        if self._rec_log_fh:
+            try:
+                self._rec_log_fh.close()
+            except Exception:
+                pass
+        self._rec_log_fh = None
+
     # ── armed 상태 감시 ───────────────────────────────────────────────
     def _cb_state(self, msg):
+        self._last_state_mono = time.monotonic()
+
+        # FC 와 연결이 끊긴 동안 mavros 는 armed=False 를 발행합니다.
+        # 이것을 disarm 으로 받아들이면 비행 중 링크가 잠깐만 끊겨도
+        # 녹화가 종료되고 bag 이 쪼개지므로, 끊긴 동안의 arm 값은 무시합니다.
+        if not msg.connected:
+            if self._fc_connected:
+                self._fc_connected = False
+                self._on_link_change(False)
+            return
+        if not self._fc_connected:
+            self._fc_connected = True
+            self._on_link_change(True)
+
         if msg.armed == self._armed:
             return
         self._armed = msg.armed
@@ -278,6 +352,50 @@ class AutoRecordNode(Node):
                 self.post_disarm_sec, self._delayed_stop
             )
 
+    def _on_link_change(self, up):
+        if self._proc is None:
+            return
+        if up:
+            self.get_logger().info('FC 연결 복구 — 녹화 계속')
+        else:
+            self.get_logger().warn(
+                f'FC 연결 끊김 — arm 상태를 알 수 없어 녹화 유지 '
+                f'({self.link_loss_stop:.0f}초 지속 시 종료)')
+        elapsed = 0.0
+        if self._start_time is not None:
+            elapsed = (self.get_clock().now() - self._start_time).nanoseconds / 1e9
+        self._events.append({'t_s': round(elapsed, 1), 'sensor': 'FC_LINK',
+                             'from': 'DOWN' if up else 'UP', 'to': 'UP' if up else 'DOWN'})
+        self._update_meta(sensor_events=self._events)
+
+    def _link_watch(self):
+        """
+        녹화 중 FC 링크 끊김이 오래 지속되면 녹화를 종료합니다.
+
+        mavros 가 재기동 중이면 /mavros/state 자체가 오지 않으므로
+        '끊김 상태' 와 '상태 미수신' 을 모두 끊김으로 봅니다.
+        """
+        if self._proc is None:
+            self._link_lost_since = None
+            return
+        now = time.monotonic()
+        stale = self._last_state_mono is None or now - self._last_state_mono > 5.0
+        if self._fc_connected and not stale:
+            self._link_lost_since = None
+            return
+        if self._link_lost_since is None:
+            self._link_lost_since = now
+            return
+        lost = now - self._link_lost_since
+        if lost >= self.link_loss_stop:
+            self.get_logger().warn(f'FC 연결 끊김 {lost:.0f}초 지속 — 녹화 종료')
+            if self._stop_timer is not None:
+                self._stop_timer.cancel()
+                self._stop_timer = None
+            self.stop_recording('FC 연결 끊김 지속')
+            self._armed = False
+            self._link_lost_since = None
+
     def _delayed_stop(self):
         if self._stop_timer is not None:
             self._stop_timer.cancel()
@@ -290,7 +408,42 @@ class AutoRecordNode(Node):
             self._health = json.loads(msg.data)
             self._health_time = self.get_clock().now().nanoseconds
         except Exception:
-            pass
+            return
+        if self._proc is not None:
+            self._track_health_change(self._health.get('groups', {}))
+
+    def _track_health_change(self, groups):
+        """
+        녹화 중 센서 상태가 바뀌면 경고·기록합니다.
+
+        서비스와 노드는 살아 있는데 데이터만 멈춘 경우를 잡기 위한 것입니다.
+        (예: 비행 중 USB 접촉 불량으로 THL100 이 끊겼다 복구)
+        변화는 onboard.log, 비행별 녹화 로그, 메타 JSON 에 모두 남습니다.
+        """
+        elapsed = 0.0
+        if self._start_time is not None:
+            elapsed = (self.get_clock().now() - self._start_time).nanoseconds / 1e9
+        changed = False
+        for g, st in groups.items():
+            prev = self._prev_groups.get(g)
+            if prev == st:
+                continue
+            ev = {'t_s': round(elapsed, 1), 'sensor': g, 'from': prev, 'to': st}
+            self._events.append(ev)
+            changed = True
+            text = f'녹화 중 센서 상태 변화 [{elapsed:.0f}초]: {g} {prev} → {st}'
+            if st == 'OK':
+                self.get_logger().info(text)
+            else:
+                self.get_logger().warn(text)
+            if self._rec_log_fh:
+                try:
+                    self._rec_log_fh.write(f'# {text}\n')
+                except Exception:
+                    pass
+        self._prev_groups = dict(groups)
+        if changed:
+            self._update_meta(sensor_events=self._events)
 
     # ── 프리플라이트 체크 ─────────────────────────────────────────────
     def _preflight_check(self):
@@ -379,11 +532,24 @@ class AutoRecordNode(Node):
             'sensor_status':  health,
             'free_gb':        round(self._free_gb(), 2),
             'topics':         len(self.topics),
+            'record_log':     f'{name}_record.log',
         }
+        self._meta = meta
+        self._meta_path = os.path.join(self.save_dir, f'{name}_meta.json')
+        self._flush_meta()
+
+    def _update_meta(self, **kw):
+        if self._meta is None:
+            return
+        self._meta.update(kw)
+        self._flush_meta()
+
+    def _flush_meta(self):
         try:
-            path = os.path.join(self.save_dir, f'{name}_meta.json')
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(meta, f, ensure_ascii=False, indent=2)
+            tmp = self._meta_path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(self._meta, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, self._meta_path)     # 쓰는 도중 전원이 끊겨도 깨지지 않게
         except Exception as e:
             self.get_logger().warn(f'메타데이터 기록 실패: {e}')
 

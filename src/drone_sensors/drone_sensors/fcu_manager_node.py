@@ -249,6 +249,8 @@ class FcuManagerNode(Node):
             '--params-file', self.config_yaml,
             # 아래 값이 yaml 보다 뒤에 와야 우선 적용됩니다.
             '-p', f"fcu_url:={cfg['port']}:{cfg['baud']}",
+            # 이전 방식(node.launch)과 동일하게 GCS 브리지를 열지 않습니다
+            '-p', "gcs_url:=''",
             '-p', f"tgt_system:={cfg['tgt_system']}",
             '-p', f"tgt_component:={cfg['tgt_component']}",
             '-p', f"system_id:={cfg['system_id']}",

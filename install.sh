@@ -137,7 +137,7 @@ cat >> ~/.bashrc << ALIAS
 
 # 드론 센서 편의 명령어
 alias start_drone='$WS/scripts/guard_service.sh && $WS/scripts/check_time_sync.sh; pkill -f mavros_node 2>/dev/null; sleep 1; ros2 launch drone_sensors drone_sensor_launch.py'
-alias stop_drone='pkill -f mavros_node 2>/dev/null; pkill -f drone_sensor_launch 2>/dev/null'
+alias stop_drone='pkill -INT -f drone_sensor_launch 2>/dev/null; sleep 5; pkill -f mavros_node 2>/dev/null; true'
 alias check_topics='ros2 topic list | grep -E "mavros|respeaker|thl100|wcm6800"'
 alias check_usb='ls -la /dev/serial/by-id/'
 alias record_drone='$WS/scripts/record_data.sh'
@@ -148,7 +148,7 @@ alias monitor_drone='python3 $WS/scripts/monitor_node.py'
 alias monitor_fast='python3 $WS/scripts/monitor_node.py --interval 1'
 alias monitor_only='python3 $WS/scripts/monitor_node.py --no-log'
 alias detect_fc='python3 $WS/scripts/serial_autodetect.py --fc'
-alias fc_status='ros2 topic echo /fcu_manager/status --once --field data'
+alias fc_status='bash $WS/scripts/watch_fcu.sh --once'
 alias extract_audio='python3 $WS/scripts/extract_audio.py'
 alias detect_serial='python3 $WS/scripts/serial_autodetect.py'
 alias scan_bags='python3 $WS/scripts/scan_bags.py'

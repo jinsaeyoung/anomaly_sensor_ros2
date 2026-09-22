@@ -87,15 +87,17 @@ do_check() {
     fi
 
     echo ""
-    echo "[7] USB 인식 (CH340 = FC 젠더)"
-    if lsusb | grep -q "1a86:"; then
-        if ls /dev/serial/by-id/ 2>/dev/null | grep -q "1a86"; then
-            ok "CH340 인식 + 시리얼 노드 생성됨"
-        else
-            fail "CH340 은 보이나 시리얼 노드 없음 → brltty 충돌 의심"
-        fi
+    echo "[7] USB-UART 장치 인식"
+    # 어떤 젠더든 쓸 수 있으므로 특정 칩을 요구하지 않습니다.
+    # 다만 CH340 이 USB 로는 보이는데 시리얼 노드가 없으면 brltty 충돌입니다.
+    n_tty=$(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | wc -l)
+    if [ "$n_tty" -gt 0 ]; then
+        ok "시리얼 장치 ${n_tty}개 (어떤 장치인지는 detect_serial 로 확인)"
     else
-        warn "CH340 미인식 — 젠더 연결 확인 필요"
+        warn "시리얼 장치 없음 — 젠더 연결 확인"
+    fi
+    if lsusb | grep -q "1a86:" && ! ls /dev/serial/by-id/ 2>/dev/null | grep -q "1a86"; then
+        fail "CH340 은 USB 로 보이나 시리얼 노드 없음 → brltty 충돌 의심"
     fi
 
     echo ""
@@ -267,7 +269,7 @@ if [ "${NEED_REPLUG:-0}" = "1" ]; then
     echo " ⚠️  brltty 를 제거했습니다."
     echo "     FC 젠더(CH340) USB 를 한 번 뽑았다 다시 꽂으세요."
     echo "     그 후 아래로 확인:"
-    echo "       check_usb          # usb-1a86_USB_Serial 이 보여야 정상"
+    echo "       detect_serial      # FC / THL100 / WCM6800 판별 확인"
     echo ""
 fi
 
