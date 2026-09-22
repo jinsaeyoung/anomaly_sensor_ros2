@@ -31,7 +31,7 @@ echo " 먼저 서비스를 중지하세요:"
 echo "   sudo systemctl stop $SERVICE_NAME"
 echo ""
 echo " 서비스가 수집 중인 데이터를 확인만 하려면:"
-echo "   check_record"
+echo "   monitor_drone --once"
 echo "=============================================================="
 echo ""
 exit 1

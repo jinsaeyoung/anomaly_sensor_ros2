@@ -4,7 +4,7 @@
 #
 # 무인 운용에 필요한 시스템 레벨 설정을 한 번에 처리합니다.
 #   1. brltty 제거        — CH340 젠더를 점자 장치로 오인해 가로채는 문제 해결
-#   2. sudo NOPASSWD      — watch_fcu 자동 복구가 비밀번호 없이 동작하도록
+#   2. sudo 예외 정리     — 이전 버전의 비밀번호 생략 설정 제거 (더 이상 불필요)
 #   3. ROS_DOMAIN_ID 고정 — 서비스와 셸의 DDS 도메인 불일치 방지
 #   4. udev 규칙          — 시리얼/ReSpeaker 접근 권한
 #   5. dialout 그룹       — 시리얼 포트 권한
@@ -43,11 +43,11 @@ do_check() {
     fi
 
     echo ""
-    echo "[2] sudo NOPASSWD (자동 복구용)"
-    if sudo -n systemctl status "$SERVICE_NAME" >/dev/null 2>&1; then
-        ok "비밀번호 없이 systemctl 실행 가능"
+    echo "[2] 불필요한 sudo 예외"
+    if [ -f /etc/sudoers.d/anomaly-sensor ]; then
+        warn "이전 버전의 비밀번호 생략 설정이 남아 있음 — 적용 시 제거됩니다"
     else
-        warn "비밀번호 필요 — watch_fcu 자동 복구가 실패할 수 있습니다"
+        ok "없음 (FC 복구는 관리 노드가 권한 없이 처리)"
     fi
 
     echo ""
@@ -147,7 +147,7 @@ echo ""
 echo " Ubuntu 기본 설치된 brltty(점자 단말기 데몬)가 CH340(1a86:7523)을"
 echo " 점자 장치로 오인해 가로채면, ch341 드라이버가 바인딩되지 못해"
 echo " /dev/ttyUSB* 노드가 생성되지 않습니다."
-echo " (lsusb 에는 보이는데 check_usb 에는 안 나오는 증상)"
+echo " (lsusb 에는 보이는데 /dev/ttyUSB* 가 생기지 않는 증상)"
 echo ""
 
 if dpkg -l 2>/dev/null | grep -q "^ii  brltty "; then
@@ -163,31 +163,17 @@ else
     NEED_REPLUG=0
 fi
 
-# ── 2. sudo NOPASSWD ──────────────────────────────────────────────────
-head "[2/7] sudo NOPASSWD 설정 (자동 복구용)"
+# ── 2. 이전 버전 sudo 예외 제거 ───────────────────────────────────────────────────────────────────────────────────────
+head "[2/7] 이전 버전 sudo 예외 제거"
 echo ""
-echo " watch_fcu 가 FC 연결 실패 시 서비스를 자동 재시작하려면"
-echo " 비밀번호 없이 systemctl 을 실행할 수 있어야 합니다."
-echo " 지정한 3개 명령에만 적용되므로 전체 sudo 개방보다 안전합니다."
+echo " 예전에는 watch_fcu 가 서비스를 재시작하도록 systemctl 을 비밀번호 없이 허용했습니다."
+echo " 이제 FC 복구는 fcu_manager_node 가 권한 없이 처리하므로 필요 없습니다."
 echo ""
-
-SYSTEMCTL_BIN="$(command -v systemctl)"
-SUDOERS_FILE="/etc/sudoers.d/anomaly-sensor"
-
-sudo tee "$SUDOERS_FILE" > /dev/null << EOF
-# anomaly_sensor_ros2 무인 운용용 — 서비스 제어만 비밀번호 없이 허용
-$RUN_USER ALL=(ALL) NOPASSWD: $SYSTEMCTL_BIN restart $SERVICE_NAME
-$RUN_USER ALL=(ALL) NOPASSWD: $SYSTEMCTL_BIN start $SERVICE_NAME
-$RUN_USER ALL=(ALL) NOPASSWD: $SYSTEMCTL_BIN stop $SERVICE_NAME
-$RUN_USER ALL=(ALL) NOPASSWD: $SYSTEMCTL_BIN status $SERVICE_NAME
-EOF
-sudo chmod 440 "$SUDOERS_FILE"
-
-if sudo visudo -c -f "$SUDOERS_FILE" >/dev/null 2>&1; then
-    ok "설정 완료: $SUDOERS_FILE"
+if [ -f /etc/sudoers.d/anomaly-sensor ]; then
+    sudo rm -f /etc/sudoers.d/anomaly-sensor
+    ok "제거 완료: /etc/sudoers.d/anomaly-sensor"
 else
-    fail "문법 오류 — 파일을 제거합니다"
-    sudo rm -f "$SUDOERS_FILE"
+    ok "해당 없음"
 fi
 
 # ── 3. ROS_DOMAIN_ID 고정 ─────────────────────────────────────────────
@@ -195,7 +181,7 @@ head "[3/7] ROS_DOMAIN_ID 고정"
 echo ""
 echo " systemd 서비스는 ROS_DOMAIN_ID=0 으로 실행됩니다."
 echo " 셸에 값이 없거나 다르면 DDS 도메인이 달라져"
-echo " 서비스가 정상 동작해도 check_topics 에 아무것도 안 보입니다."
+echo " 서비스가 정상 동작해도 monitor_drone 에 아무것도 안 보입니다."
 echo ""
 
 if ! grep -q "ROS_DOMAIN_ID" ~/.bashrc 2>/dev/null; then
@@ -283,7 +269,7 @@ echo " 다음 단계:"
 echo "   source ~/.bashrc"
 echo "   bash scripts/install_service.sh          # 서비스 등록 (부팅 자동실행 OFF)"
 echo "   sudo systemctl start $SERVICE_NAME"
-echo "   sleep 40 && check_record"
+echo "   sleep 40 && monitor_drone --once"
 echo ""
 echo "   문제 없으면 실기체 운용 전환:"
 echo "   bash scripts/install_service.sh enable"

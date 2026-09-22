@@ -133,7 +133,7 @@ bash scripts/setup_onboard_env.sh
 | 항목 | 이유 |
 |---|---|
 | `brltty` 제거 | CH340 젠더를 점자 장치로 오인해 가로채는 문제 방지 |
-| sudo NOPASSWD | 자동 복구가 비밀번호 없이 동작하도록 |
+| 이전 sudo 예외 제거 | 예전 버전의 비밀번호 생략 설정 정리 (더 이상 불필요) |
 | `ROS_DOMAIN_ID=0` | 서비스와 셸의 DDS 도메인 일치 |
 | `dialout` 그룹 | 시리얼 포트 권한 |
 | 로그 파일 소유권 | systemd가 root로 만드는 문제 방지 |
@@ -152,7 +152,7 @@ exit
 
 ```bash
 onboard_env check        # 모든 항목 ✅ 확인
-check_usb                # USB 장치 목록
+detect_serial            # FC / THL100 / WCM6800 판별
 ```
 
 ```bash
@@ -230,7 +230,7 @@ analyze_drone ~/anomaly_data/anomaly_data_*
 bash scripts/install_service.sh          # 등록만 (부팅 자동실행 OFF)
 sudo systemctl start anomaly-sensor
 sleep 40
-check_record
+monitor_drone --once
 ```
 
 ### 9단계 — 부팅 자동 실행
@@ -246,7 +246,7 @@ sudo reboot
 
 ```bash
 sleep 60
-check_record
+monitor_drone --once
 head -40 ~/anomaly_data/onboard.log
 ```
 
@@ -259,8 +259,8 @@ FC 연결과 녹화 대기 상태가 자동으로 잡히면 완료입니다. 이
 | 증상 | 확인 |
 |---|---|
 | 설치 직후 시리얼 권한 오류 | 재로그인했는지 (`groups \| grep dialout`) |
-| `check_topics`에 아무것도 안 보임 | `echo $ROS_DOMAIN_ID` 가 `0` 인지 |
-| FC만 연결 안 됨 | `check_usb`로 젠더 인식 확인, brltty 제거 여부 |
+| `monitor_drone`에 아무것도 안 보임 | `echo $ROS_DOMAIN_ID` 가 `0` 인지 |
+| FC만 연결 안 됨 | `detect_serial`로 인식 확인, brltty 제거 여부 |
 | 특정 토픽만 안 옴 | SR2 파라미터 설정 확인 |
 
 자세한 내용은 아래 [트러블슈팅](#트러블슈팅) 절을 참고하세요.
@@ -322,16 +322,13 @@ anomaly_sensor_ros2/
 │   ├── analyze_bag.py         # CSV 변환 + 10Hz 정렬 + 그래프
 │   ├── extract_audio.py       # 마이크 원본 PCM → WAV
 │   ├── verify_bag.py          # 녹화 검증 (드론 판정 + 외부센서 표기)
-│   ├── scan_bags.py           # 전체 bag 센서 유무 빠른 점검
-│   ├── diagnose_bags.sh       # 누락 bag 원인 분류 (세션별)
 │   ├── extract_bag_log.sh     # 특정 bag 전후 로그 추출
 │   ├── start_onboard.sh       # 온보드 자동 실행 (systemd 호출)
 │   ├── install_service.sh     # 부팅 자동 실행 서비스 등록
 │   ├── setup_onboard_env.sh   # 온보드 환경 일괄 설정
-│   ├── check_record.sh        # 자동 녹화 상태 점검
 │   ├── check_time_sync.sh     # 시간 동기화 확인
 │   ├── guard_service.sh       # 수동 실행 시 서비스 충돌 방지
-│   └── watch_fcu.sh           # FC 관리 상태 확인 (읽기 전용)
+│   └── watch_fcu.sh           # fc_status 본체
 ├── tests/
 │   ├── test_parsers.py        # 파서·SYSID 탐지·좌표변환 단위 테스트
 │   └── virtual_uart_test.sh   # 가상 UART 통합 테스트
@@ -345,36 +342,25 @@ anomaly_sensor_ros2/
 
 ## 편의 alias
 
-`.bashrc`에 자동 등록됩니다. 새 터미널을 열거나 `source ~/.bashrc` 후 사용 가능합니다.
+`install.sh`가 `.bashrc`에 등록합니다. 새 터미널을 열거나 `source ~/.bashrc` 후 사용하세요.
 
-| alias | 동작 | 설명 |
+| 구분 | alias | 설명 |
 |---|---|---|
-| `start_drone` | 시간 동기화 확인 → mavros 정리 → launch | 전체 센서 실행 |
-| `stop_drone` | mavros/launch 프로세스 종료 | 전체 종료 |
-| `check_topics` | 관련 토픽 필터링 출력 | 발행 중인 토픽 확인 |
-| `check_usb` | `ls -la /dev/serial/by-id/` | USB 시리얼 장치 확인 |
-| `record_drone` | `scripts/record_data.sh` | rosbag 녹화 |
-| `analyze_drone` | `python3 scripts/analyze_bag.py` | CSV + 그래프 생성 |
-| `check_record` | `scripts/check_record.sh` | 자동 녹화/서비스 상태 점검 |
-| `onboard_log` | `tail -f ~/anomaly_data/onboard.log` | 온보드 실행 로그 확인 |
-| `service_status` | `install_service.sh status` | 부팅 자동실행 모드 확인 |
-| `watch_fcu` | `watch_fcu.sh` | FC 관리 상태 확인 (읽기 전용) |
-| `onboard_env` | `setup_onboard_env.sh` | 온보드 환경 설정 / 상태 확인 |
-| `monitor_drone` | `monitor_node.py` | 실시간 모니터 (3초) — FC·녹화·센서·로그·최근 녹화 |
-| `monitor_fast` | `monitor_node.py --interval 1` | 1초 갱신 (arm 테스트) |
-| `monitor_only` | `monitor_node.py --no-log` | 로그 섹션 제외 |
-| `extract_audio` | `extract_audio.py` | 마이크 원본 PCM을 WAV로 추출 |
-| `detect_serial` | `serial_autodetect.py` | 시리얼 장치 자동 탐색 |
-| `detect_fc` | `serial_autodetect.py --fc` | FC 포트·baud·SYSID·링크 구성원 |
-| `fc_status` | `/fcu_manager/status` | mavros 관리 상태 (연결/복구/재시작) |
+| 실행 | `start_drone` | 수동 실행 (시간 동기화 확인 → launch, 자동녹화 없음) |
+| | `stop_drone` | 전체 종료 |
+| 상태 | `monitor_drone` | 실시간 모니터 — FC·녹화·센서·로그·최근 녹화 (`--interval 1`, `--no-log`, `--once`) |
+| | `fc_status` | FC 관리 상태 1회 (포트·baud·SYSID·재시작 사유) |
+| | `onboard_log` | 서비스 실행 로그 실시간 |
+| | `service_status` | 부팅 자동실행 여부 |
+| 장치 | `detect_serial` | FC·THL100·WCM6800 판별 (FC baud·SYSID·링크 구성원 포함) |
+| | `onboard_env` | 온보드 환경 설정 / `onboard_env check` 로 점검 |
+| 녹화·분석 | `record_drone` | 수동 녹화 (`record_drone 30`) |
+| | `verify_bag` | 녹화 검증 — 드론 판정 + 외부센서 표기 (`--all`, `--csv`) |
+| | `bag_log` | 특정 bag 녹화 전후 로그 |
+| | `analyze_drone` | CSV + 그래프 |
+| | `extract_audio` | 마이크 원본 PCM → WAV |
 
-```bash
-start_drone                                          # 전체 실행
-record_drone 30                                      # 30초 녹화
-analyze_drone ~/anomaly_data/anomaly_data_20260616_160131
-check_usb
-stop_drone
-```
+이전 버전의 `check_topics`, `check_usb`, `check_record`, `watch_fcu`, `detect_fc`, `scan_bags`, `monitor_fast`, `monitor_only`는 위 명령으로 통합되었습니다. `install.sh`를 다시 실행하면 자동으로 정리됩니다.
 
 ---
 
@@ -401,7 +387,6 @@ VID:PID나 by-id 경로에 의존하지 않고, 각 포트를 열어 **수신 �
 
 ```bash
 detect_serial     # 전체 장치 판별
-detect_fc         # FC 상세 — 포트·baud·SYSID·링크 구성원
 ```
 
 ```
@@ -508,7 +493,7 @@ TELEM 포트에 **어떤 USB-UART 젠더(CH340·PL2303·CP2102 등)든** 연결�
 **포트가 바뀌면 SR 파라미터 접두어도 바뀝니다.** USB로 `SR0_*`를 설정해두고 TELEM2로 옮기면 데이터가 오지 않으니 `SR2_*`를 다시 설정해야 합니다.
 
 ```bash
-check_usb                       # 연결된 장치 확인
+detect_serial                   # 연결된 장치 판별
 
 ros2 launch drone_sensors drone_sensor_launch.py \
   fcu_url:=/dev/ttyACM0:115200  # 다른 포트/속도로 실행
@@ -608,7 +593,7 @@ done
 
 ### baud rate 확인
 
-보통은 `detect_fc`가 자동으로 찾습니다. 그래도 안 될 때 어떤 속도에서 신호가 오는지 직접 확인하는 방법입니다.
+보통은 `detect_serial`이 자동으로 찾습니다. 그래도 안 될 때 어떤 속도에서 신호가 오는지 직접 확인하는 방법입니다.
 
 ```bash
 python3 -c "
@@ -665,10 +650,10 @@ ros2 launch drone_sensors drone_sensor_launch.py \
   respeaker_update_rate:=50.0
 ```
 
-새 터미널에서 토픽 확인:
+새 터미널에서 상태 확인:
 
 ```bash
-check_topics
+monitor_drone
 ```
 
 종료:
@@ -702,10 +687,10 @@ armed → disarmed   : post_disarm_sec(기본 10초) 후 종료
 
 ```bash
 monitor_drone              # 3초 갱신 (기본)
-monitor_fast               # 1초 갱신 (arm 테스트)
+monitor_drone --interval 1 # 1초 갱신 (arm 테스트)
 monitor_drone --interval 5 # 5초 갱신 (장시간 방치)
 monitor_drone --log 10     # 로그 10줄
-monitor_only               # 로그 섹션 제외
+monitor_drone --no-log     # 로그 섹션 제외
 monitor_drone --once       # 1회 출력
 ```
 
@@ -810,7 +795,7 @@ journalctl -u anomaly-sensor -f          # 실시간 로그
 ### 상태 확인
 
 ```bash
-check_record     # 서비스/노드/녹화/arm/디스크 한 번에 점검
+monitor_drone    # 서비스/노드/녹화/arm/센서 한 번에
 onboard_log      # 실행 로그 실시간
 ```
 
@@ -890,11 +875,10 @@ FC_STABLE_SEC=15 WAIT_USB_SEC=120 bash scripts/install_service.sh
 `fcu_manager_node`가 자동으로 처리합니다. 연결이 끊기면 **mavros만** 내리고 포트·baud·SYSID를 재탐지해 다시 띄우며, 센서 노드와 녹화는 끊기지 않습니다. 자세한 내용은 [장치 자동 구분과 FC 자동 연결](#장치-자동-구분과-fc-자동-연결)을 참고하세요.
 
 ```bash
-fc_status          # 관리 상태 1회
-watch_fcu          # 5초마다 갱신 (읽기 전용)
+fc_status          # 관리 상태 1회 (상시 확인은 monitor_drone)
 ```
 
-`watch_fcu`는 상태만 보여줍니다. 예전 버전은 서비스 전체를 재시작했는데, 관리 노드와 겹치면 녹화까지 끊기므로 복구 기능을 제거했습니다.
+예전 버전의 `watch_fcu`는 서비스 전체를 재시작했는데, 관리 노드와 겹치면 녹화까지 끊기므로 제거했습니다. `fc_status`는 상태만 보여줍니다.
 
 ### 비행별 기록 파일
 
@@ -1388,21 +1372,21 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0
 | 젠더 교체 후 `No such file or directory` | `by-id`는 젠더 개체의 시리얼 번호 기반이라 교체 시 경로가 바뀜 | 자동 탐색이 처리함(적용됨). `detect_serial`로 확인 |
 | 같은 모델 젠더 2개를 구분 못 함 | VID:PID가 동일 | 데이터 시그니처로 판별(적용됨) |
 | USB 재삽입 후 FC만 재연결 안 됨 (`reconnect failed: No such file`) | mavros가 시작 시 경로를 고정 → 번호가 바뀌면 복구 못 함 | `fcu_manager_node`가 재탐지 후 재기동 (적용됨). `fc_status`로 확인 |
-| FC가 HEARTBEAT를 보내는데 `connected: false` | FC의 SYSID가 1이 아님 (예: 2) | HEARTBEAT로 SYSID 자동 탐지 (적용됨). `detect_fc`로 확인 |
+| FC가 HEARTBEAT를 보내는데 `connected: false` | FC의 SYSID가 1이 아님 (예: 2) | HEARTBEAT로 SYSID 자동 탐지 (적용됨). `detect_serial`로 확인 |
 | `detected remote address 191.239` 같은 이상한 주소 | 잘못된 baud의 잡음을 MAVLink로 오인 | CRC 검증으로 차단 (적용됨) |
 | 비행제어기 여러 대 경고 | 같은 링크에 다른 기체가 중계됨 | `tgt_system:=N`으로 대상 지정 |
 | 첫 연결인데 `재시작 1회` | 센서 노드가 추측한 폴백 경로로 FC 포트를 먼저 열어 HEARTBEAT를 나눠 가짐 | FC 포트 선점 표시 + 센서 폴백 `auto` (적용됨). 모니터의 '마지막 재시작 사유' 확인 |
 | 모니터 윗부분이 반복돼 보임 | 창보다 화면이 길어 넘친 줄이 스크롤백에 쌓임 | 별도 화면 사용 + 크기 맞춤 (적용됨). 창을 40줄 이상으로 |
 | `git clone` 시 `이미 있고 빈 디렉터리가 아닙니다` | 같은 이름의 폴더가 이미 존재 | 기존 것을 지우고 clone 하거나 `git pull`로 갱신 ([2단계](#2단계--저장소-클론-및-설치) 참고) |
 | mavros 실행 실패 (`libdiagnostic_updater.so`) | diagnostic 패키지 미설치 | `sudo apt install ros-humble-diagnostic-updater ros-humble-diagnostic-msgs` (install.sh 반영) |
-| `lsusb`엔 CH340이 보이는데 `check_usb`엔 없음 | `brltty`가 CH340을 점자 장치로 오인 | `bash scripts/setup_onboard_env.sh` 후 USB 재삽입 |
+| `lsusb`엔 CH340이 보이는데 `/dev/ttyUSB*`가 없음 | `brltty`가 CH340을 점자 장치로 오인 | `bash scripts/setup_onboard_env.sh` 후 USB 재삽입 |
 | 진동 토픽이 목록에 없음 (`Unknown topic`) | mavros 기본 pluginlist가 `vibration` 차단 | 커스텀 `config/apm_pluginlists.yaml` 사용 (적용됨) |
 | 진동 토픽은 있으나 데이터 없음 | `SR2_EXTRA3` 미설정 | Mission Planner에서 `SR2_EXTRA3=20` |
 | 연결은 되는데 IMU 토픽이 안 옴 | 포트에 맞는 SR 파라미터 미설정 | TELEM2면 `SR2_*`, USB면 `SR0_*` |
 | `VER: broadcast request timeout` 반복 | baud 불일치 또는 TELEM 포트 비활성 | baud 확인, `SERIAL2_PROTOCOL`/`BAUD` 점검 |
-| `serial:open: No such file or directory` | `fcu_url` 경로 불일치 | `check_usb`로 확인 후 수정 |
+| `serial:open: No such file or directory` | `fcu_url` 경로 불일치 | `detect_serial`로 확인 (평소에는 자동 탐지) |
 | 부팅 후 mavros만 연결 실패, USB 재삽입하면 정상 | FC 전원 인가 중 젠더 재열거링 | `FC_STABLE_SEC` 안정화 대기 (적용됨) |
-| 서비스는 active인데 `check_topics`에 아무것도 안 보임 | 셸의 `ROS_DOMAIN_ID` 불일치 | `export ROS_DOMAIN_ID=0` (자동 등록됨) |
+| 서비스는 active인데 `monitor_drone`에 아무것도 안 보임 | 셸의 `ROS_DOMAIN_ID` 불일치 | `export ROS_DOMAIN_ID=0` (자동 등록됨) |
 | `ros2 node list`가 0개, 모니터가 비어 보임 | `ros2 daemon` 크래시 | 자동 복구됨. **녹화에는 영향 없음** |
 | 시리얼 `Permission denied` | `dialout` 그룹 미적용 | 재로그인 또는 `newgrp dialout` |
 | 수동 실행 시 mavros 크래시 | 서비스가 이미 구동 중 | `sudo systemctl stop anomaly-sensor` |

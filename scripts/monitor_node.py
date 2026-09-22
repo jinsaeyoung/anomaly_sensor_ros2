@@ -229,7 +229,7 @@ class MonitorNode(Node):
         if st is None:
             o.append(f"│  {c.red}mavros 응답 없음{c.reset}")
             if fm is None:
-                o.append(f"│  {c.dim}launch 가 실행 중인지 확인하세요 (detect_fc 로 FC 확인){c.reset}")
+                o.append(f"│  {c.dim}launch 가 실행 중인지 확인하세요 (detect_serial 로 FC 확인){c.reset}")
         else:
             age = time.monotonic() - st_t
             if age > 5.0:

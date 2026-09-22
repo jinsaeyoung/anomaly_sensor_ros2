@@ -11,8 +11,7 @@
 #  센서·녹화까지 끊기므로 복구 기능을 제거했습니다)
 #
 # 사용법:
-#   watch_fcu            # 5초마다 갱신
-#   watch_fcu --once     # 1회 출력
+#   fc_status            # 1회 출력 (상시 확인은 monitor_drone)
 # ══════════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,7 +29,7 @@ show() {
     s=$(timeout 6 ros2 topic echo /fcu_manager/status --once 2>/dev/null)
     if [ -z "$s" ]; then
         echo "  fcu_manager_node 응답 없음 — launch 실행 여부를 확인하세요"
-        echo "  (FC 자체 확인: detect_fc)"
+        echo "  (FC 자체 확인: detect_serial)"
         return 1
     fi
     echo "$s" | python3 -c "
@@ -54,14 +53,5 @@ if d.get('others'):
 "
 }
 
-if [ "${1:-}" = "--once" ]; then
-    show
-    exit $?
-fi
-
-trap 'echo; exit 0' INT
-while true; do
-    clear
-    show
-    sleep 5
-done
+show
+exit $?

@@ -128,35 +128,36 @@ if ! grep -q "source $WS/install/setup.bash" ~/.bashrc; then
 fi
 
 # 기존 alias 제거 후 재등록 (재실행 시 중복/구버전 방지)
-for a in start_drone stop_drone check_topics check_usb record_drone analyze_drone check_record onboard_log service_status watch_fcu onboard_env monitor_drone monitor_fast monitor_only monitor_sh fix_devices detect_fc fc_status extract_audio detect_serial scan_bags verify_bag bag_log setup_fc scan_baud; do
+# 현재 alias + 이전 버전에서 쓰던 alias 를 모두 지우고 다시 등록합니다
+for a in start_drone stop_drone monitor_drone fc_status onboard_log service_status \
+         detect_serial onboard_env record_drone verify_bag bag_log analyze_drone extract_audio \
+         check_topics check_usb check_record watch_fcu monitor_fast monitor_only monitor_sh \
+         detect_fc scan_bags fix_devices setup_fc scan_baud; do
     sed -i "/^alias ${a}=/d" ~/.bashrc
 done
+sed -i '/^#   \(실행\|상태\|장치\|녹화·분석\) /d' ~/.bashrc
 sed -i '/^# 드론 센서 편의 명령어$/d' ~/.bashrc
 
 cat >> ~/.bashrc << ALIAS
 
 # 드론 센서 편의 명령어
+#   실행      start_drone / stop_drone
+#   상태      monitor_drone / fc_status / onboard_log / service_status
+#   장치      detect_serial / onboard_env
+#   녹화·분석 record_drone / verify_bag / bag_log / analyze_drone / extract_audio
 alias start_drone='$WS/scripts/guard_service.sh && $WS/scripts/check_time_sync.sh; pkill -f mavros_node 2>/dev/null; sleep 1; ros2 launch drone_sensors drone_sensor_launch.py'
 alias stop_drone='pkill -INT -f drone_sensor_launch 2>/dev/null; sleep 5; pkill -f mavros_node 2>/dev/null; true'
-alias check_topics='ros2 topic list | grep -E "mavros|respeaker|thl100|wcm6800"'
-alias check_usb='ls -la /dev/serial/by-id/'
-alias record_drone='$WS/scripts/record_data.sh'
-alias service_status='bash $WS/scripts/install_service.sh status'
-alias watch_fcu='bash $WS/scripts/watch_fcu.sh'
-alias onboard_env='bash $WS/scripts/setup_onboard_env.sh'
 alias monitor_drone='python3 $WS/scripts/monitor_node.py'
-alias monitor_fast='python3 $WS/scripts/monitor_node.py --interval 1'
-alias monitor_only='python3 $WS/scripts/monitor_node.py --no-log'
-alias detect_fc='python3 $WS/scripts/serial_autodetect.py --fc'
 alias fc_status='bash $WS/scripts/watch_fcu.sh --once'
-alias extract_audio='python3 $WS/scripts/extract_audio.py'
+alias onboard_log='tail -f \$HOME/anomaly_data/onboard.log'
+alias service_status='bash $WS/scripts/install_service.sh status'
 alias detect_serial='python3 $WS/scripts/serial_autodetect.py'
-alias scan_bags='python3 $WS/scripts/scan_bags.py'
+alias onboard_env='bash $WS/scripts/setup_onboard_env.sh'
+alias record_drone='$WS/scripts/record_data.sh'
 alias verify_bag='python3 $WS/scripts/verify_bag.py'
 alias bag_log='bash $WS/scripts/extract_bag_log.sh'
 alias analyze_drone='python3 $WS/scripts/analyze_bag.py'
-alias check_record='bash $WS/scripts/check_record.sh'
-alias onboard_log='tail -f \$HOME/anomaly_data/onboard.log'
+alias extract_audio='python3 $WS/scripts/extract_audio.py'
 ALIAS
 
 source ~/.bashrc 2>/dev/null || true
@@ -169,37 +170,26 @@ echo "=========================================="
 echo ""
 echo "  ⚠️  로그아웃 후 재로그인 필요 (dialout 그룹 적용)"
 echo ""
-echo "  start_drone              — 시간 동기화 확인 후 전체 센서 실행"
-echo "  stop_drone               — 전체 센서 종료"
-echo "  check_topics             — 토픽 목록 확인"
-echo "  check_usb                — USB 장치 확인"
-echo "  record_drone 30          — 30초 데이터 녹화"
-echo "  analyze_drone <bag경로>  — 데이터 분석 (CSV + 그래프)"
-echo "  check_record             — 자동 녹화/서비스 상태 확인"
-echo "  onboard_log              — 온보드 실행 로그 실시간 확인"
+echo "  [실행]"
+echo "    start_drone              전체 실행 (수동, 자동녹화 없음)"
+echo "    stop_drone               전체 종료"
+echo "  [상태]"
+echo "    monitor_drone            실시간 모니터 (--interval 1 / --no-log / --once)"
+echo "    fc_status                FC 관리 상태 (포트·SYSID·재시작)"
+echo "    onboard_log              서비스 실행 로그"
+echo "    service_status           부팅 자동실행 여부"
+echo "  [장치]"
+echo "    detect_serial            FC/THL100/WCM6800 판별 (FC baud·SYSID 포함)"
+echo "    onboard_env check        온보드 환경 점검"
+echo "  [녹화·분석]"
+echo "    record_drone 30          30초 수동 녹화"
+echo "    verify_bag [bag|--all]   녹화 검증 (드론 판정 + 외부센서 표기)"
+echo "    bag_log <bag>            해당 bag 전후 로그"
+echo "    analyze_drone <bag>      CSV + 그래프"
+echo "    extract_audio <bag>      마이크 PCM → WAV"
 echo ""
-echo "  service_status           — 부팅 자동실행 모드 확인"
-echo "  watch_fcu --once         — FC 연결 상태 점검"
-echo "  onboard_env check        — 온보드 환경 상태 확인"
-echo "  monitor_drone            — 실시간 모니터 3초 + 로그 (기본)"
-echo "  monitor_fast             — 1초 갱신 (arm 테스트용)"
-echo "  monitor_only             — 모니터만 (로그 제외)"
-echo "  detect_fc                — FC 포트·baud·SYSID·링크 구성원 확인"
-echo "  fc_status                — mavros 관리 상태 (연결/복구/재시작 횟수)"
-echo "  extract_audio <bag경로>  — 마이크 원본 PCM 을 WAV 로 추출"
-echo "  detect_serial            — 시리얼 장치 자동 탐색 (젠더 교체 대응)"
-echo "  verify_bag [bag|--all]   — 녹화 검증 (드론 판정 + 외부센서 표기)"
-echo "  scan_bags                — 전체 bag 의 센서 데이터 유무 빠른 점검"
-echo "  bag_log <bag이름>        — 해당 bag 의 녹화 전후 로그 추출"
-echo ""
-echo "  ⚠️  온보드(무인) 운용 시 먼저 실행하세요:"
-echo "    bash scripts/setup_onboard_env.sh        # brltty 제거, sudo, 도메인 등"
-echo ""
-echo "  온보드 자동 실행:"
-echo "    bash scripts/install_service.sh          # 등록만 (개발 모드)"
-echo "    bash scripts/install_service.sh enable   # 부팅 자동실행 ON (운용)"
-echo "    bash scripts/install_service.sh disable  # 개발 모드로 복귀"
-echo ""
-echo "  FC 포트 변경 시:"
-echo "    ros2 launch drone_sensors drone_sensor_launch.py fcu_url:=/dev/ttyACM0:115200"
+echo "  온보드(무인) 운용:"
+echo "    bash scripts/setup_onboard_env.sh        # 최초 1회 (brltty 제거 등)"
+echo "    bash scripts/install_service.sh          # 서비스 등록 (자동실행 OFF)"
+echo "    bash scripts/install_service.sh enable   # 부팅 자동실행 ON"
 echo "=========================================="

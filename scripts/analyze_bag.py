@@ -81,6 +81,13 @@ STALE_LIMITS = {
     'Label':   60.0,   # 라벨은 수동 발행이라 오래 유지
     'Metadata': 3600.0,
     'Diag':    10.0,
+    # 미션·랠리·지오펜스는 업로드 시에만 발행(latched)되므로 만료시키지 않습니다.
+    # 짧게 두면 몇 초 뒤 전부 NaN 이 됩니다.
+    'Mission':   3600.0,
+    'Rally':     3600.0,
+    'Fence':     3600.0,
+    'TimeSync':  10.0,     # 약 1Hz — 여유를 둠
+    'GlobalPos': 2.0,
 }
 DEFAULT_STALE = 2.0
 
