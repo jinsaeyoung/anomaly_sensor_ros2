@@ -154,7 +154,7 @@ Environment="FC_STABLE_SEC=$FC_STABLE_SEC"
 
 # 부팅 직후 USB 열거링 대기
 # 장치 안정화는 start_onboard.sh 가 직접 확인하므로 짧게 둡니다
-ExecStartPre=/bin/sleep 5
+ExecStartPre=/bin/sleep 2
 ExecStart=/bin/bash $WS/scripts/start_onboard.sh
 
 # rosbag 정상 마감을 위해 SIGINT 사용 (SIGTERM 은 bag 손상 위험)

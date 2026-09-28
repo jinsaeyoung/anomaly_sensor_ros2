@@ -669,6 +669,31 @@ class TestVerifyBag(unittest.TestCase):
         g = self._stats(50, holes=[(10, 12)])
         self.assertEqual(self.vb.judge_drone(self._drone(**{'/mavros/imu/data': g}))[0], '주의')
 
+    def test_result_reuse(self):
+        """같은 bag·같은 기준이면 재사용, bag 이 바뀌거나 --recheck 면 다시 검증"""
+        d = tempfile.mkdtemp()
+        bag = os.path.join(d, 'flight_x'); os.makedirs(bag)
+        with open(os.path.join(bag, 'flight_x_0.db3'), 'w') as f:
+            f.write('a')
+        calls = []
+        orig = self.vb.verify
+        self.vb.verify = lambda b, with_arm=True: calls.append(b) or {
+            'name': 'flight_x', 'duration': 1.0, 'drone_level': '정상',
+            'drone_reasons': [], 'sensor_state': {}, 'unclosed': False}
+        try:
+            cache = {}
+            self.assertFalse(self.vb.verify_summary(bag, cache)[1])      # 처음: 검증
+            self.assertTrue(self.vb.verify_summary(bag, cache)[1])       # 두 번째: 재사용
+            self.assertFalse(self.vb.verify_summary(bag, cache, recheck=True)[1])
+            with open(os.path.join(bag, 'flight_x_0.db3'), 'a') as f:  # bag 변경
+                f.write('bbbb')
+            self.assertFalse(self.vb.verify_summary(bag, cache)[1])
+            cache['flight_x']['criteria'] = 'old'                          # 기준 변경
+            self.assertFalse(self.vb.verify_summary(bag, cache)[1])
+            self.assertEqual(len(calls), 4)
+        finally:
+            self.vb.verify = orig
+
     def test_sensor_states(self):
         empty = self.vb.topic_stats([], self.T0, int(self.T0 + 60e9), 1, 5.0)
         self.assertEqual(self.vb.judge_sensor(empty), '없음')

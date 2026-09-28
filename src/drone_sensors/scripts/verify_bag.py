@@ -17,12 +17,14 @@ bag 하나(또는 전체)를 읽어 "드론 데이터가 제대로 저장됐는�
   verify_bag flight_20260921_190312   # 특정 bag (이름 또는 경로)
   verify_bag --all                    # 전체 bag 요약표
   verify_bag --all --csv out.csv      # 요약표를 CSV 로 저장
+  verify_bag --all --recheck          # 저장된 결과를 무시하고 전부 다시 검증
 """
 
 import os
 import re
 import sys
 import glob
+import hashlib
 import json
 import signal
 import sqlite3
@@ -51,6 +53,11 @@ SENSOR_TOPICS = {
 
 RATE_WARN = 0.7     # 기대 주기의 70% 미만이면 '주기 낮음'
 BIG_GAP   = 5.0     # 드론 데이터가 이 시간 이상 끊기면 '불량'
+
+# 판정 기준의 지문 — 위 값을 바꾸면 저장된 검증 결과를 자동으로 다시 계산합니다
+CRITERIA = hashlib.sha1(json.dumps(
+    {'d': DRONE_TOPICS, 's': SENSOR_TOPICS, 'w': RATE_WARN, 'g': BIG_GAP},
+    sort_keys=True).encode()).hexdigest()[:8]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -291,6 +298,61 @@ def verify(bag, with_arm=True):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 결과 재사용 (--all)
+#   bag 하나 검증에 50분 비행 기준 수 초가 걸려, 비행이 쌓이면 --all 이 수 분이 됩니다.
+#   bag 파일(크기·수정 시각)과 판정 기준이 그대로면 이전 결과를 씁니다.
+# ══════════════════════════════════════════════════════════════════════════════
+def cache_path():
+    return os.path.join(data_dir(), '.verify_cache.json')
+
+
+def bag_signature(bag):
+    size, mtime = 0, 0.0
+    for f in glob.glob(os.path.join(bag, '*')):
+        try:
+            st = os.stat(f)
+            size += st.st_size
+            mtime = max(mtime, st.st_mtime)
+        except OSError:
+            pass
+    return f'{size}-{int(mtime)}'
+
+
+def load_cache():
+    try:
+        with open(cache_path(), encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_cache(cache):
+    try:
+        tmp = cache_path() + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(cache, f, ensure_ascii=False)
+        os.replace(tmp, cache_path())
+    except OSError:
+        pass            # 저장 못 해도 검증 결과에는 영향 없음
+
+
+SUMMARY_KEYS = ('name', 'duration', 'drone_level', 'drone_reasons', 'sensor_state', 'unclosed')
+
+
+def verify_summary(bag, cache, recheck=False):
+    """--all 용 요약 결과 (가능하면 재사용). 반환: (요약, 재사용 여부)"""
+    name = os.path.basename(bag.rstrip('/'))
+    sig = bag_signature(bag)
+    hit = cache.get(name)
+    if not recheck and hit and hit.get('sig') == sig and hit.get('criteria') == CRITERIA:
+        return hit['result'], True
+    r = verify(bag, with_arm=False)
+    summary = {k: r[k] for k in SUMMARY_KEYS}
+    cache[name] = {'sig': sig, 'criteria': CRITERIA, 'result': summary}
+    return summary, False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # 출력
 # ══════════════════════════════════════════════════════════════════════════════
 def _pad(s, width):
@@ -387,8 +449,16 @@ def main():
         bags = list_bags()
         if not bags:
             print('bag 이 없습니다:', data_dir()); sys.exit(1)
-        print(f'검증 대상 {len(bags)}개 ({data_dir()})')
-        results = [verify(b, with_arm=False) for b in bags]
+        cache = load_cache()
+        recheck = '--recheck' in args
+        results, reused = [], 0
+        for b in bags:
+            r, hit = verify_summary(b, cache, recheck)
+            results.append(r)
+            reused += hit
+        save_cache(cache)
+        print(f'검증 대상 {len(bags)}개 ({data_dir()})  '
+              f'— 새로 검증 {len(bags) - reused}개, 이전 결과 재사용 {reused}개')
         print_table(results)
         if csv_out:
             import csv

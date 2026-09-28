@@ -122,8 +122,8 @@ if [ $stable -lt "$STABLE_SEC" ]; then
     log "      각 노드가 실행 중 스스로 재탐색하므로 나중에 연결돼도 복구됩니다."
 fi
 
-# 장치 노드 권한이 적용될 시간 확보 (udev 규칙 처리)
-sleep 3
+# (장치 노드 권한은 udev 가 생성 시점에 적용합니다. 위 안정화 확인에서
+#  이미 수 초 이상 유지된 장치이므로 별도 대기가 필요 없습니다.)
 
 log "연결된 시리얼 장치:"
 if ls /dev/serial/by-id/* >/dev/null 2>&1; then
@@ -140,8 +140,10 @@ if [ -x "$WS/scripts/check_time_sync.sh" ]; then
 fi
 
 # ── 이전 프로세스 정리 ────────────────────────────────────────────────
-pkill -f mavros_node 2>/dev/null || true
-sleep 2
+# 부팅 직후에는 대개 남은 프로세스가 없으므로, 정리했을 때만 기다립니다.
+if pkill -f mavros_node 2>/dev/null; then
+    sleep 2
+fi
 
 # ── 실행 ──────────────────────────────────────────────────────────────
 log "launch 실행 (자동 녹화 활성화)"

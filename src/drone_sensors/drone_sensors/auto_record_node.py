@@ -377,6 +377,17 @@ class AutoRecordNode(Node):
             self.get_logger().warn(f'검증 결과 기록 실패: {e}')
             return
 
+        # verify_bag --all 이 이 결과를 재사용하도록 함께 저장 (다시 검증할 필요 없음)
+        try:
+            name = os.path.basename(bag_path.rstrip('/'))
+            cache = verify_bag.load_cache()
+            cache[name] = {'sig': verify_bag.bag_signature(bag_path),
+                           'criteria': verify_bag.CRITERIA,
+                           'result': {k: r[k] for k in verify_bag.SUMMARY_KEYS}}
+            verify_bag.save_cache(cache)
+        except Exception:
+            pass
+
         lacking = [g for g, s in result['sensors'].items() if s != '정상']
         text = (f"비행 검증 — 드론 {result['drone']}"
                 + (f" ({', '.join(result['reasons'][:2])})" if result['reasons'] else '')
