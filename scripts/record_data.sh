@@ -121,6 +121,13 @@ TOPICS=(
     /respeaker/audio       # 16kHz 6ch PCM 원본 (약 187 KB/s, 0.64 GB/시간)
 )
 
+# rosbag 내부 캐시 축소 — 기본값(100MB)은 전원이 끊기면 수 분치가 사라집니다.
+# 지원하지 않는 ROS2 버전에서는 옵션을 붙이지 않습니다.
+CACHE_OPT=""
+if ros2 bag record --help 2>&1 | grep -q -- '--max-cache-size'; then
+    CACHE_OPT="--max-cache-size ${MAX_CACHE_BYTES:-8388608}"
+fi
+
 echo "=========================================="
 echo " rosbag 녹화 시작"
 echo " 워크스페이스: $WS"
@@ -134,13 +141,13 @@ fi
 echo "=========================================="
 
 if [ -n "$DURATION" ]; then
-    ros2 bag record -o "$BAG_NAME" "${TOPICS[@]}" &
+    ros2 bag record -o "$BAG_NAME" $CACHE_OPT "${TOPICS[@]}" &
     BAG_PID=$!
     sleep "$DURATION"
     kill -SIGINT $BAG_PID 2>/dev/null
     wait $BAG_PID 2>/dev/null
 else
-    ros2 bag record -o "$BAG_NAME" "${TOPICS[@]}"
+    ros2 bag record -o "$BAG_NAME" $CACHE_OPT "${TOPICS[@]}"
 fi
 
 echo ""

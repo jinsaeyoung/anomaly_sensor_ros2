@@ -8,6 +8,7 @@
 #   3. ROS_DOMAIN_ID 고정 — 서비스와 셸의 DDS 도메인 불일치 방지
 #   4. udev 규칙          — 시리얼/ReSpeaker 접근 권한
 #   5. dialout 그룹       — 시리얼 포트 권한
+#   6. 시각 보존          — 전원 차단 후 시계가 되돌아가지 않도록
 #   6. 설정 검증          — 적용 결과 확인
 #
 # 사용법:
@@ -101,7 +102,17 @@ do_check() {
     fi
 
     echo ""
-    echo "[8] 로그 파일 권한"
+    echo "[8] 시각 보존"
+    if [ -e /dev/rtc0 ] && sudo -n hwclock -r >/dev/null 2>&1; then
+        ok "하드웨어 RTC 사용"
+    elif dpkg -l 2>/dev/null | grep -q "^ii  fake-hwclock "; then
+        ok "fake-hwclock 사용 (마지막 저장 시각부터 시작)"
+    else
+        warn "RTC·fake-hwclock 없음 — 전원 차단 후 시각이 과거로 돌아갈 수 있습니다"
+    fi
+
+    echo ""
+    echo "[9] 로그 파일 권한"
     LOG_FILE="$HOME/anomaly_data/onboard.log"
     if [ -f "$LOG_FILE" ]; then
         owner=$(stat -c '%U' "$LOG_FILE")
@@ -116,7 +127,7 @@ do_check() {
     fi
 
     echo ""
-    echo "[9] systemd 서비스"
+    echo "[10] systemd 서비스"
     if [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
         echo -n "     실행:        "; systemctl is-active  "$SERVICE_NAME" 2>/dev/null || echo inactive
         echo -n "     부팅 자동실행: "; systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || echo disabled
@@ -142,7 +153,7 @@ echo " 워크스페이스: $WS"
 echo "=========================================="
 
 # ── 1. brltty 제거 ────────────────────────────────────────────────────
-head "[1/7] brltty 제거 (CH340 젠더 충돌 해결)"
+head "[1/8] brltty 제거 (CH340 젠더 충돌 해결)"
 echo ""
 echo " Ubuntu 기본 설치된 brltty(점자 단말기 데몬)가 CH340(1a86:7523)을"
 echo " 점자 장치로 오인해 가로채면, ch341 드라이버가 바인딩되지 못해"
@@ -164,7 +175,7 @@ else
 fi
 
 # ── 2. 이전 버전 sudo 예외 제거 ───────────────────────────────────────────────────────────────────────────────────────
-head "[2/7] 이전 버전 sudo 예외 제거"
+head "[2/8] 이전 버전 sudo 예외 제거"
 echo ""
 echo " 예전에는 watch_fcu 가 서비스를 재시작하도록 systemctl 을 비밀번호 없이 허용했습니다."
 echo " 이제 FC 복구는 fcu_manager_node 가 권한 없이 처리하므로 필요 없습니다."
@@ -177,7 +188,7 @@ else
 fi
 
 # ── 3. ROS_DOMAIN_ID 고정 ─────────────────────────────────────────────
-head "[3/7] ROS_DOMAIN_ID 고정"
+head "[3/8] ROS_DOMAIN_ID 고정"
 echo ""
 echo " systemd 서비스는 ROS_DOMAIN_ID=0 으로 실행됩니다."
 echo " 셸에 값이 없거나 다르면 DDS 도메인이 달라져"
@@ -193,7 +204,7 @@ fi
 export ROS_DOMAIN_ID=0
 
 # ── 4. udev 규칙 ──────────────────────────────────────────────────────
-head "[4/7] udev 규칙 설정"
+head "[4/8] udev 규칙 설정"
 
 echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2886", MODE="0666"' | \
     sudo tee /etc/udev/rules.d/60-respeaker.rules > /dev/null
@@ -211,7 +222,7 @@ sudo udevadm trigger
 ok "udev 규칙 재적용"
 
 # ── 5. dialout 그룹 ───────────────────────────────────────────────────
-head "[5/7] dialout 그룹"
+head "[5/8] dialout 그룹"
 
 if id -nG "$RUN_USER" | tr ' ' '\n' | grep -qx dialout; then
     ok "이미 등록됨"
@@ -227,7 +238,7 @@ if ! groups | tr ' ' '\n' | grep -qx dialout; then
 fi
 
 # ── 6. 로그 파일 권한 ─────────────────────────────────────────────────
-head "[6/7] 로그 파일 권한"
+head "[6/8] 로그 파일 권한"
 echo ""
 echo " systemd 의 append: 모드는 파일이 없으면 root 소유로 생성합니다."
 echo " 그러면 사용자가 로그를 비울 수 없어 미리 소유권을 맞춰둡니다."
@@ -244,7 +255,41 @@ else
 fi
 
 # ── 7. 검증 ───────────────────────────────────────────────────────────
-head "[7/7] 적용 결과 확인"
+head "[7/8] 시각 보존 (RTC / fake-hwclock)"
+echo ""
+echo " 드론과 전원을 공유하면 매번 강제 종료됩니다."
+echo " 배터리 달린 RTC 가 없으면 다음 부팅 때 시계가 과거로 돌아가고,"
+echo " bag 이름과 타임스탬프가 뒤엉켜 녹화 순서를 알 수 없게 됩니다."
+echo ""
+
+if [ -e /dev/rtc0 ] && sudo hwclock -r >/dev/null 2>&1; then
+    ok "하드웨어 RTC 있음 ($(sudo hwclock -r 2>/dev/null | head -1))"
+else
+    warn "하드웨어 RTC 없음 — fake-hwclock 으로 마지막 시각을 보존합니다"
+    if dpkg -l 2>/dev/null | grep -q "^ii  fake-hwclock "; then
+        ok "fake-hwclock 이미 설치됨"
+    else
+        sudo apt install -y fake-hwclock >/dev/null 2>&1 \
+            && ok "fake-hwclock 설치 완료" \
+            || fail "fake-hwclock 설치 실패 — 인터넷 연결 확인"
+    fi
+    # 종료 시점이 아니라 주기적으로 저장해야 강제 종료에도 남습니다
+    if [ ! -f /etc/cron.hourly/fake-hwclock-save ]; then
+        sudo tee /etc/cron.hourly/fake-hwclock-save > /dev/null << 'CRONEOF'
+#!/bin/sh
+# 강제 종료 대비 — 시각을 주기적으로 저장 (정상 종료 시에만 저장하면 소용없음)
+/usr/sbin/fake-hwclock save
+CRONEOF
+        sudo chmod +x /etc/cron.hourly/fake-hwclock-save
+        ok "시각 주기 저장 등록 (1시간 간격)"
+    else
+        ok "시각 주기 저장 이미 등록됨"
+    fi
+fi
+echo ""
+echo " 비행 전 인터넷에 한 번 연결하면 시각이 정확해집니다 (check_time_sync 자동 수행)."
+
+head "[8/8] 적용 결과 확인"
 do_check
 
 # ── 안내 ──────────────────────────────────────────────────────────────

@@ -28,7 +28,7 @@ from collections import deque
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
-from std_msgs.msg import String, Int32, Bool, Float32, UInt8MultiArray
+from std_msgs.msg import String, Int32, Float32
 
 
 BEST_EFFORT = QoSProfile(
@@ -48,9 +48,12 @@ WATCH = {
         ('/wcm6800/data', String, 3.0),     # 10Hz
     ],
     'ReSpeaker': [
-        ('/respeaker/doa',    Int32,           3.0),   # 31Hz
-        ('/respeaker/energy', Float32,         3.0),   # 15Hz
-        ('/respeaker/audio',  UInt8MultiArray, 3.0),   # 15Hz
+        ('/respeaker/doa',    Int32,   3.0),   # 25Hz — USB(tuning) 경로
+        # energy 는 오디오 스트림과 같은 콜백에서 발행되므로,
+        # 12KB 짜리 /respeaker/audio 를 개수만 세려고 받지 않아도
+        # 4바이트 짜리 이 토픽으로 오디오 경로 생존을 확인할 수 있습니다.
+        # (audio 자체의 기록 여부는 verify_bag 이 bag 에서 확인)
+        ('/respeaker/energy', Float32, 3.0),   # 15.6Hz — 오디오 경로
     ],
     'FC': [
         ('/mavros/imu/data', None, 2.0),    # 50Hz — 타입은 동적 로드
@@ -76,6 +79,7 @@ class SensorHealthNode(Node):
         # 여기서 한 번만 계산해 /sensor_health 에 실어 보냅니다.
         self._win = {}
         self._start = time.monotonic()
+        self._ready_logged = False
 
         for group, items in WATCH.items():
             for topic, msg_type, _ in items:
@@ -188,6 +192,14 @@ class SensorHealthNode(Node):
         m = String()
         m.data = json.dumps(payload, ensure_ascii=False)
         self.pub.publish(m)
+
+        # 전원 인가 후 언제부터 수집 준비가 됐는지 한 번 남깁니다.
+        # 드론과 전원을 공유하면 부팅 중에 이륙할 수 있어, 비행 후
+        # '그때 준비가 됐었는지' 를 판단하는 기준이 됩니다.
+        if all_ok and not self._ready_logged:
+            self._ready_logged = True
+            self.get_logger().info(
+                f'수집 준비 완료 — 전 센서 정상 (노드 시작 후 {payload["uptime_s"]:.0f}초)')
 
         # 문제가 있으면 주기적으로 로그에도 남깁니다
         if not all_ok:

@@ -610,6 +610,7 @@ def read_bag(bag_path):
     data = defaultdict(list)
     skew_stat = defaultdict(int)   # 토픽별 skew fallback 횟수
     parse_err = {}                 # 토픽별 파싱 오류 횟수
+    msg_cls = {}                   # 토픽 타입 → 메시지 클래스 (매번 조회하지 않도록)
     msg_total = 0
     db_ok = 0
 
@@ -624,20 +625,25 @@ def read_bag(bag_path):
             continue
 
         try:
+            # fetchall() 로 한 번에 받으면 오디오가 포함된 큰 bag(수백 MB)에서
+            # 전체 blob 이 메모리에 올라갑니다. 커서를 순회해 한 건씩 처리합니다.
             cursor.execute(
                 "SELECT topic_id, timestamp, data FROM messages ORDER BY timestamp")
-            rows = cursor.fetchall()
         except Exception as e:
             print(f'  [경고] {os.path.basename(db_path)} 읽기 실패: {e}')
             conn.close()
             continue
 
-        for topic_id, bag_ts, raw in rows:
+        for topic_id, bag_ts, raw in cursor:
             if topic_id not in topics:
                 continue
             topic_name, topic_type = topics[topic_id]
             try:
-                msg_class = get_message(topic_type)
+                # 타입 조회는 문자열 파싱 + import 를 거치므로
+                # 메시지마다 하면 수십만 번 반복됩니다. 토픽 타입별로 한 번만 합니다.
+                msg_class = msg_cls.get(topic_type)
+                if msg_class is None:
+                    msg_class = msg_cls[topic_type] = get_message(topic_type)
                 msg = deserialize_message(raw, msg_class)
             except Exception:
                 continue

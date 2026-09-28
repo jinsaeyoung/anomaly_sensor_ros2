@@ -106,19 +106,10 @@ bash install.sh
 기존 폴더를 유지하며 최신으로 갱신하려면:
 
 ```bash
-cd ~/anomaly_sensor_ros2
-sudo systemctl stop anomaly-sensor 2>/dev/null || true
-git pull
-
-# 로컬 수정이 있어 충돌하면
-# git stash && git pull && git stash pop
-
-bash fix_packaging.sh
-rm -rf build install log
-colcon build --symlink-install
-source install/setup.bash
-bash install.sh
+update_drone          # (설치 후 사용 가능) pull → 패키징 → 빌드 → 테스트 → 재시작
 ```
+
+처음 설치하는 모듈이라 `update_drone`이 아직 없다면 `git pull` 후 `bash install.sh`를 실행하세요.
 
 `install.sh`가 의존성 설치(mavros, pyserial, pandas 등), udev 규칙, 워크스페이스 빌드, 편의 alias 등록까지 처리합니다. 여러 번 실행해도 안전합니다.
 
@@ -359,8 +350,33 @@ anomaly_sensor_ros2/
 | | `bag_log` | 특정 bag 녹화 전후 로그 |
 | | `analyze_drone` | CSV + 그래프 |
 | | `extract_audio` | 마이크 원본 PCM → WAV |
+| 배포 | `update_drone` | GitHub 최신 반영 → 패키징 → 빌드 → 테스트 → 서비스 재시작 |
 
 이전 버전의 `check_topics`, `check_usb`, `check_record`, `watch_fcu`, `detect_fc`, `scan_bags`, `monitor_fast`, `monitor_only`는 위 명령으로 통합되었습니다. `install.sh`를 다시 실행하면 자동으로 정리됩니다.
+
+---
+
+## 코드 갱신 — `update_drone`
+
+여러 모듈에 같은 코드를 배포할 때 파일을 하나씩 복사하면 빠뜨리기 쉽습니다. `update_drone`은 저장소 전체를 한 번에 맞춥니다.
+
+```bash
+update_drone              # GitHub 최신 반영
+update_drone --no-pull    # 로컬 수정 후 다시 빌드만
+```
+
+| 단계 | 내용 |
+|---|---|
+| 1. 받기 | `git pull --ff-only`. **로컬 수정이 있으면 받지 않고 멈춤** (덮어쓰기 방지) |
+| 2. 패키징·빌드 | `fix_packaging.sh` → `colcon build` |
+| 3. 테스트 | `tests/test_parsers.py`. **실패하면 서비스를 재시작하지 않음** — 기존 코드로 계속 수집 |
+| 4. 재시작 | 서비스가 실행 중이었을 때만 |
+
+`install.sh`가 바뀐 경우(새 명령 추가 등) 안내가 나오면 `bash install.sh && source ~/.bashrc`를 한 번 실행하세요.
+
+### 패키지 안의 사본
+
+`src/drone_sensors/scripts/`의 `serial_autodetect.py`, `verify_bag.py`는 노드가 불러오는 **설치용 사본**이며 원본은 `scripts/`입니다. 원본만 고치고 `fix_packaging.sh`를 돌리지 않은 채 커밋하면 실행 시 옛 코드가 쓰이므로, 테스트가 두 파일이 같은지 확인합니다. 원본을 고쳤다면 커밋 전에 `bash fix_packaging.sh`를 실행하세요.
 
 ---
 
@@ -647,7 +663,7 @@ start_drone
 ros2 launch drone_sensors drone_sensor_launch.py \
   thl100_rate:=1.0 \
   wcm6800_rate:=10.0 \
-  respeaker_update_rate:=50.0
+  respeaker_update_rate:=25.0
 ```
 
 새 터미널에서 상태 확인:
@@ -836,6 +852,8 @@ ros2 launch drone_sensors drone_sensor_launch.py \
 | `post_disarm_sec` | 10.0 | disarm 후 추가 녹화 시간 |
 | `max_bag_duration` | 3000 | bag 분할 주기(초, 약 50분). 0이면 분할 안 함 |
 | `min_free_gb` | 2.0 | 이보다 여유가 적으면 녹화 취소·중단 |
+| `max_cache_bytes` | 8388608 | rosbag 내부 캐시(8MB). 전원 차단 시 손실 구간을 줄임. 0이면 기본값 사용 |
+| `link_loss_stop_sec` | 120.0 | FC 링크가 이만큼 끊기면 녹화 종료 (그 전까지는 유지) |
 
 ### FC 전원 인가 순서와 USB 재열거링
 
@@ -899,8 +917,24 @@ fc_status          # 관리 상태 1회 (상시 확인은 monitor_drone)
 | `sensor_events` | **녹화 중 센서 상태 변화** (예: 120초에 THL100 OK → STALE) |
 | `sensors_ok_throughout` | 시작부터 종료까지 전 센서가 정상이었는지 |
 | `duration_s`, `stop_reason`, `ended_at` | 녹화 길이와 종료 사유 |
+| `verify` | **착륙 후 자동 검증 결과** — 드론 판정, 외부센서 상태 (`verify_bag`과 같은 기준) |
+| `software` | 수집에 쓴 코드 커밋과 로컬 수정 여부. 모듈마다 버전이 다를 때 데이터셋 구분 기준 |
 
 서비스와 노드는 살아 있는데 데이터만 멈춘 경우도 `sensor_events`에 남으므로, 비행 후 이 파일만 보면 해당 bag을 학습에 쓸 수 있는지 판단할 수 있습니다.
+
+### 자원 사용
+
+온보드 모듈에서 불필요한 부하를 줄이기 위해 다음을 적용했습니다.
+
+| 항목 | 내용 |
+|---|---|
+| 상태 감시 | ReSpeaker 생존 확인을 12KB 오디오 대신 4바이트 `energy`로 (같은 콜백에서 발행되므로 오디오 경로를 동일하게 확인). **187KB/s 절감** |
+| 분석기 타입 조회 | 메시지마다 하던 메시지 타입 조회를 토픽 타입별 1회로 캐시 |
+| 마이크 오디오 | PCM을 바이트 그대로 발행 (리스트로 바꾸면 rclpy가 12,288개 원소를 하나씩 검사) |
+| DoA/VAD 폴링 | 기본 25Hz. 틱마다 USB 제어 전송이 2회 일어나며, 50Hz로 두면 장치가 따라오지 못해 실측이 31Hz로 흔들렸습니다 |
+| 모니터 | 저주기 토픽 4개만 구독. 센서 Hz는 `sensor_health_node`가 계산한 값을 받아 씀 |
+| 장치 탐지 | MAVLink 조기 판정을 0.3초 간격으로만 수행 (매번 버퍼 전체를 다시 파싱하면 2.5초 탐색 중 0.6초를 파싱에 소모) |
+| 분석기 | rosbag 메시지를 커서로 한 건씩 처리. 한 번에 읽으면 오디오 포함 bag에서 수백 MB가 메모리에 올라감 |
 
 ### 로그 관리
 
@@ -923,6 +957,45 @@ sudo chown $USER:$USER ~/anomaly_data/onboard.log
 sudo truncate -s 0 ~/anomaly_data/onboard.log
 ```
 
+### 드론과 전원을 공유하는 경우
+
+전원을 드론과 함께 쓰면 **전원 인가 즉시 켜지고, 리눅스 종료 절차 없이 전원이 내려갑니다.** 비행 중 차단은 추락을 뜻하므로 상정하지 않고, **착륙·녹화 종료 후 전원을 내리는 시점**을 기준으로 설계했습니다.
+
+#### 언제 전원을 내려도 되는가
+
+disarm 직후가 아닙니다. 착륙 후에도 `post_disarm_sec`(기본 10초) 동안 녹화가 이어지고, 그 뒤 bag 마감 → 메타·로그 기록 → 디스크 기록 순서를 거칩니다. **이 과정이 끝나기 전에 전원을 내리면 그 비행의 bag이 마감되지 못합니다.**
+
+끝난 시점은 두 곳에서 확인할 수 있습니다.
+
+```
+monitor_drone  →  저장 완료 — 전원 차단 가능
+onboard.log    →  저장 완료 — 지금부터 전원을 내려도 안전합니다 (flight_...)
+```
+
+녹화 중에는 모니터에 `⚠ 녹화 중 — 전원을 내리지 마세요`가 표시됩니다. 실무적으로는 **착륙 후 약 15초 뒤**에 내리시면 됩니다.
+
+#### 기록 순서
+
+판정에 쓰는 `_meta.json`과 `_record.log`도 아직 메모리에만 있을 수 있으므로, 기록 순서를 다음과 같이 맞췄습니다.
+
+```
+rosbag 마감(SIGINT) → 메타 기록(fsync) → 녹화 로그 기록(fsync) → sync
+```
+
+메타는 임시 파일에 쓴 뒤 이름을 바꾸고 디렉터리까지 `fsync`하므로, 쓰는 도중 전원이 끊겨도 이전 내용이 깨지지 않습니다.
+
+#### 그 밖에 확인할 것
+
+| 항목 | 내용 |
+|---|---|
+| **시각 보존** | RTC가 없으면 다음 부팅 때 시계가 과거로 돌아가 bag 이름·타임스탬프가 뒤엉킵니다. `setup_onboard_env.sh`가 RTC를 확인하고, 없으면 `fake-hwclock`을 설치해 **1시간 주기로 저장**합니다 (기본 설정은 정상 종료 때만 저장해 강제 차단에는 소용없음) |
+| **부팅 시 파일시스템 검사** | 종료 절차 없이 내리는 일이 반복되면 부팅 때 검사가 걸릴 수 있습니다. 검사가 사용자 입력을 기다리면 그날 수집을 못 하므로, 커널 파라미터에 `fsck.mode=auto fsck.repair=yes`를 넣어 자동 복구되게 해두는 편이 안전합니다 |
+| **준비 완료 시점** | 전원 인가 후 수집 준비까지 약 40~60초입니다. 준비된 순간이 로그에 `수집 준비 완료 — 전 센서 정상 (노드 시작 후 N초)`로 남습니다. 이륙 전 `monitor_drone --once`로 센서 4개가 `● 정상`인지 확인하세요 |
+| **마감 실패 감지** | 그래도 마감되지 못한 bag이 생기면 `verify_bag`이 **"마감되지 않음(전원 차단 추정)"** 으로 표시하고 `ros2 bag reindex` 복구를 안내합니다 |
+| 디스크 여유 | 매 전원 인가마다 자동 녹화되므로 쌓입니다. `min_free_gb`(기본 2GB) 밑이면 녹화가 중단되니 `verify_bag --all`로 점검 후 정리하세요 |
+
+전원이 레귤레이터로 안정 공급되므로 rosbag 캐시는 8MB(약 25초분), `sync`는 15초 주기로 두었습니다. 추락이나 전압 이상 같은 예외적인 경우에만 그만큼이 손실됩니다.
+
 ### 전원 차단 대비
 
 비행 중 갑작스러운 전원 차단은 완전히 막을 수 없지만, 손실을 최소화하도록 세 가지 장치를 두었습니다.
@@ -930,7 +1003,8 @@ sudo truncate -s 0 ~/anomaly_data/onboard.log
 | 장치 | 효과 |
 |---|---|
 | `max_bag_duration` 3000초 분할 | 손상 시 마지막 구간만 영향, 이전 파일은 온전 |
-| 30초 주기 `sync` | 디스크 캐시를 주기적으로 실제 기록 |
+| rosbag 캐시 8MB | 기본값(100MB)은 오디오 포함 시 **5분치가 메모리에만** 남습니다. 8MB면 약 25초분으로 줄어듭니다 (추락·전압 이상 대비) |
+| 15초 주기 `sync` | 녹화 중 OS 디스크 캐시를 주기적으로 실제 기록 |
 | systemd `KillSignal=SIGINT` | 정상 종료 시 rosbag이 파일을 올바르게 마감 |
 
 `systemctl stop`이나 정상 종료(shutdown) 경로로는 bag이 손상되지 않습니다. 배터리를 갑자기 분리하는 상황만 위험하며, 이때도 분할된 이전 구간은 온전합니다.
@@ -1234,6 +1308,8 @@ extract_audio ~/anomaly_data/flight_20260803_111347 --ch 1    # 특정 채널
 ### 녹화 검증 — `verify_bag`
 
 비행 후 녹화가 제대로 됐는지 확인합니다. **드론 데이터로 판정**하고, 외부센서는 옆에 수집 상태를 표시합니다.
+
+녹화가 끝나면 같은 판정이 **자동으로 실행**되어 `_meta.json`의 `verify`에 기록되고, `monitor_drone`의 최근 녹화 목록에 바로 표시됩니다(`드론 정상 · THL100 확인`). 로그에도 `비행 검증 — 드론 정상 / 외부센서 전부 정상` 형태로 남습니다. 수동 실행은 과거 bag을 다시 보거나 기준을 바꿨을 때 사용합니다.
 
 ```bash
 verify_bag                          # 가장 최근 bag

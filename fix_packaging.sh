@@ -23,10 +23,24 @@ echo "=========================================="
 
 # 노드 패키지별 entry point 정의 ("|"로 여러 개 구분)
 declare -A ENTRY_POINTS=(
-  ["respeaker"]="respeaker_node = respeaker.respeaker_node:main|respeaker_full_node = respeaker.respeaker_full_node:main"
+  ["respeaker"]="respeaker_full_node = respeaker.respeaker_full_node:main"
   ["thl100_sensor"]="thl100_node = thl100_sensor.thl100_uart_node:main"
   ["wcm6800_sensor"]="wcm6800_node = wcm6800_sensor.wcm6800_uart_node:main"
 )
+
+# 노드가 실제로 쓰는 파이썬 라이브러리 — package.xml 에 명시해 두면
+# rosdep install 로 한 번에 설치할 수 있습니다.
+declare -A RUN_DEPS=(
+  ["respeaker"]="python3-numpy python3-pyaudio python3-usb"
+  ["thl100_sensor"]="python3-serial ament_index_python"
+  ["wcm6800_sensor"]="python3-serial ament_index_python"
+)
+
+# 구버전 노드 정리 — launch 는 respeaker_full_node 만 사용합니다
+if [ -f "$SRC/respeaker/respeaker/respeaker_node.py" ]; then
+    rm -f "$SRC/respeaker/respeaker/respeaker_node.py"
+    echo "  - 구버전 respeaker_node.py 제거 (respeaker_full_node 로 대체됨)"
+fi
 
 for PKG in respeaker thl100_sensor wcm6800_sensor; do
     PKG_DIR="$SRC/$PKG"
@@ -37,6 +51,16 @@ for PKG in respeaker thl100_sensor wcm6800_sensor; do
 
     echo ""
     echo "[$PKG] 처리 중..."
+
+    # 0) 실행 의존성
+    if [ -f "$PKG_DIR/package.xml" ]; then
+        for dep in ${RUN_DEPS[$PKG]}; do
+            if ! grep -q "<exec_depend>$dep</exec_depend>\|<depend>$dep</depend>" "$PKG_DIR/package.xml"; then
+                sed -i "s|</package>|  <exec_depend>$dep</exec_depend>\n</package>|" "$PKG_DIR/package.xml"
+                echo "  + package.xml 실행 의존성: $dep"
+            fi
+        done
+    fi
 
     # 1) resource 마커 파일
     mkdir -p "$PKG_DIR/resource"
@@ -115,10 +139,15 @@ if [ -d "$PKG_DIR" ]; then
 
     # launch 가 import 하는 자동 탐색 모듈을 패키지 안으로 복사
     # (워크스페이스 scripts/ 가 원본, 패키지 scripts/ 는 설치본)
-    if [ -f "$WS/scripts/serial_autodetect.py" ]; then
-        cp -f "$WS/scripts/serial_autodetect.py" "$PKG_DIR/scripts/"
-        echo "  ✓ scripts/serial_autodetect.py 복사"
-    fi
+    # 노드가 import 하는 모듈 — 원본은 워크스페이스 scripts/ 이고 이것은 설치용 사본입니다.
+    # 원본만 고치고 이 스크립트를 다시 돌리지 않으면 옛 버전이 쓰이므로,
+    # tests/test_parsers.py 가 두 파일이 같은지 확인합니다.
+    for mod in serial_autodetect.py verify_bag.py; do
+        if [ -f "$WS/scripts/$mod" ]; then
+            cp -f "$WS/scripts/$mod" "$PKG_DIR/scripts/"
+            echo "  ✓ scripts/$mod 복사"
+        fi
+    done
 
     cat > "$PKG_DIR/setup.cfg" << 'CFGEOF'
 [develop]

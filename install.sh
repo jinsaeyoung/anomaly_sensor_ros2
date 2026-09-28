@@ -130,7 +130,7 @@ fi
 # 기존 alias 제거 후 재등록 (재실행 시 중복/구버전 방지)
 # 현재 alias + 이전 버전에서 쓰던 alias 를 모두 지우고 다시 등록합니다
 for a in start_drone stop_drone monitor_drone fc_status onboard_log service_status \
-         detect_serial onboard_env record_drone verify_bag bag_log analyze_drone extract_audio \
+         detect_serial onboard_env record_drone verify_bag bag_log analyze_drone extract_audio update_drone \
          check_topics check_usb check_record watch_fcu monitor_fast monitor_only monitor_sh \
          detect_fc scan_bags fix_devices setup_fc scan_baud; do
     sed -i "/^alias ${a}=/d" ~/.bashrc
@@ -145,6 +145,7 @@ cat >> ~/.bashrc << ALIAS
 #   상태      monitor_drone / fc_status / onboard_log / service_status
 #   장치      detect_serial / onboard_env
 #   녹화·분석 record_drone / verify_bag / bag_log / analyze_drone / extract_audio
+#   배포      update_drone
 alias start_drone='$WS/scripts/guard_service.sh && $WS/scripts/check_time_sync.sh; pkill -f mavros_node 2>/dev/null; sleep 1; ros2 launch drone_sensors drone_sensor_launch.py'
 alias stop_drone='pkill -INT -f drone_sensor_launch 2>/dev/null; sleep 5; pkill -f mavros_node 2>/dev/null; true'
 alias monitor_drone='python3 $WS/scripts/monitor_node.py'
@@ -158,6 +159,7 @@ alias verify_bag='python3 $WS/scripts/verify_bag.py'
 alias bag_log='bash $WS/scripts/extract_bag_log.sh'
 alias analyze_drone='python3 $WS/scripts/analyze_bag.py'
 alias extract_audio='python3 $WS/scripts/extract_audio.py'
+alias update_drone='bash $WS/scripts/update.sh'
 ALIAS
 
 source ~/.bashrc 2>/dev/null || true
@@ -187,6 +189,8 @@ echo "    verify_bag [bag|--all]   녹화 검증 (드론 판정 + 외부센서 �
 echo "    bag_log <bag>            해당 bag 전후 로그"
 echo "    analyze_drone <bag>      CSV + 그래프"
 echo "    extract_audio <bag>      마이크 PCM → WAV"
+echo "  [배포]"
+echo "    update_drone             GitHub 최신 반영 → 빌드 → 테스트 → 재시작"
 echo ""
 echo "  온보드(무인) 운용:"
 echo "    bash scripts/setup_onboard_env.sh        # 최초 1회 (brltty 제거 등)"

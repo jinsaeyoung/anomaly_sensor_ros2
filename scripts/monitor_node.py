@@ -277,6 +277,13 @@ class MonitorNode(Node):
         else:
             o.append("│  ○  대기 중 (arm 하면 자동 시작)")
             o.append(f"│     디스크 여유: {rec.get('free_gb', 0):.1f} GB")
+
+        # 전원을 내려도 되는 시점 — disarm 후에도 몇 초간은 녹화가 이어지므로
+        # 그 사이에 전원을 끊으면 마지막 bag 이 마감되지 못합니다.
+        if rec.get('recording'):
+            o.append(f"│  {c.red}⚠ 녹화 중 — 전원을 내리지 마세요{c.reset}")
+        elif rec.get('safe_power_off'):
+            o.append(f"│  {c.green}저장 완료 — 전원 차단 가능{c.reset}")
         o.append(self._bottom())
         return o
 
@@ -409,7 +416,15 @@ class MonitorNode(Node):
             o.append(f"│  {c.dim}(녹화 없음){c.reset}")
         for r in rows:
             pf = ''
-            if r['preflight'] is True:
+            v = r.get('verify')
+            if v:
+                # 착륙 후 자동 검증 결과가 있으면 그것을 우선 표시
+                lacking = [g for g, s in (v.get('sensors') or {}).items() if s != '정상']
+                col = c.green if v.get('drone') == '정상' and not lacking else c.yellow
+                if v.get('drone') == '불량':
+                    col = c.red
+                pf = f"{col}드론 {v.get('drone')}" + (f" · {','.join(lacking)} 확인" if lacking else '') + c.reset
+            elif r['preflight'] is True:
                 pf = f"{c.green}프리플라이트 OK{c.reset}"
             elif r['preflight'] is False:
                 pf = f"{c.yellow}프리플라이트 경고{c.reset}"
@@ -436,15 +451,18 @@ class MonitorNode(Node):
                 size_s = f"{size / 1024 / 1024:.1f}MB" if size < 1024 ** 3 else f"{size / 1024 ** 3:.2f}GB"
             except OSError:
                 size_s = '-'
-            preflight = None
+            preflight, verify = None, None
             meta = os.path.join(self.save_dir, f'{name}_meta.json')
             if os.path.exists(meta):
                 try:
-                    preflight = bool(json.load(open(meta, encoding='utf-8')).get('preflight_ok'))
+                    with open(meta, encoding='utf-8') as fh:
+                        md = json.load(fh)
+                    preflight = bool(md.get('preflight_ok'))
+                    verify = md.get('verify')          # 착륙 후 자동 검증 결과
                 except Exception:
                     pass
             rows.append({
-                'name': name, 'size': size_s, 'preflight': preflight,
+                'name': name, 'size': size_s, 'preflight': preflight, 'verify': verify,
                 'time': time.strftime('%m-%d %H:%M', time.localtime(os.path.getmtime(d))),
             })
         self._rec_cache = rows

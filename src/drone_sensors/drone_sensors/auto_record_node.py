@@ -23,6 +23,8 @@ import json
 import shutil
 import signal
 import subprocess
+import sys
+import threading
 import time
 from datetime import datetime
 
@@ -117,6 +119,14 @@ class AutoRecordNode(Node):
         # FC 링크가 끊긴 채 이 시간이 지나면 녹화 종료 (추락·전원 차단 대비)
         # 그 전까지는 arm 상태를 알 수 없으므로 녹화를 유지합니다.
         self.declare_parameter('link_loss_stop_sec', 120.0)
+        # rosbag 내부 캐시 크기(바이트).
+        # 기본값(100MB)은 오디오 포함 시 5분치가 메모리에만 남아 있다가
+        # 전원이 갑자기 끊기면 통째로 사라집니다. 작게 잡아 손실 구간을 줄입니다.
+        # 전원은 레귤레이터로 안정 공급되고, 비행 중 차단은 상정하지 않습니다.
+        # 다만 추락·전압 이상에 대비해 기본값(100MB, 약 5분치)보다는 작게 둡니다.
+        # 8MB ≈ 25초분 (오디오 포함 약 340KB/s 기준)
+        self.declare_parameter('max_cache_bytes', 8 * 1024 * 1024)
+        self.declare_parameter('sync_interval_sec', 15.0)
         self.declare_parameter('topics',            DEFAULT_TOPICS)
         self.declare_parameter('name_prefix',       'flight')
 
@@ -126,6 +136,10 @@ class AutoRecordNode(Node):
         self.min_free_gb     = self.get_parameter('min_free_gb').value
         self.max_bag_dur     = self.get_parameter('max_bag_duration').value
         self.link_loss_stop  = float(self.get_parameter('link_loss_stop_sec').value)
+        self.max_cache_bytes = int(self.get_parameter('max_cache_bytes').value)
+        self.sync_interval   = float(self.get_parameter('sync_interval_sec').value)
+        self._rec_opts = self._supported_record_options()
+        self._software = self._software_version()
         self.topics          = list(self.get_parameter('topics').value)
         self.name_prefix     = self.get_parameter('name_prefix').value
 
@@ -144,6 +158,7 @@ class AutoRecordNode(Node):
         self._fc_connected  = False
         self._last_state_mono = None
         self._link_lost_since = None
+        self._safe_since    = None    # 녹화 마감 + 디스크 기록이 끝난 시각
         self._armed         = False
         self._stop_timer    = None
         self._start_time    = None
@@ -157,7 +172,7 @@ class AutoRecordNode(Node):
         self.create_timer(5.0, self._link_watch)
 
         self.create_timer(5.0,  self._publish_status)
-        self.create_timer(30.0, self._periodic_sync)
+        self.create_timer(self.sync_interval, self._periodic_sync)
 
         mode = '자동(arm 연동)' if self.auto_on_arm else '수동'
         self.get_logger().info(
@@ -204,11 +219,19 @@ class AutoRecordNode(Node):
 
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         name  = f'{self.name_prefix}_{stamp}'
+        # 같은 초에 다시 녹화하면 이름이 겹치고, ros2 bag record 는
+        # 이미 있는 폴더에 쓰지 못해 녹화가 실패합니다. 겹치면 번호를 붙입니다.
+        n = 2
+        while os.path.exists(os.path.join(self.save_dir, name)):
+            name = f'{self.name_prefix}_{stamp}_{n}'
+            n += 1
         self._bag_path = os.path.join(self.save_dir, name)
 
         cmd = ['ros2', 'bag', 'record', '-o', self._bag_path]
-        if self.max_bag_dur and self.max_bag_dur > 0:
+        if self.max_bag_dur and self.max_bag_dur > 0 and '--max-bag-duration' in self._rec_opts:
             cmd += ['--max-bag-duration', str(self.max_bag_dur)]
+        if self.max_cache_bytes > 0 and '--max-cache-size' in self._rec_opts:
+            cmd += ['--max-cache-size', str(self.max_cache_bytes)]
         cmd += self.topics
 
         # 비행별 녹화 로그 — rosbag 의 구독·경고·오류 메시지를 bag 옆에 보관합니다.
@@ -267,12 +290,6 @@ class AutoRecordNode(Node):
         if self._start_time is not None:
             dur = (self.get_clock().now() - self._start_time).nanoseconds / 1e9
 
-        # 디스크 캐시 강제 기록 (전원 차단 시 데이터 손실 방지)
-        try:
-            subprocess.run(['sync'], timeout=10)
-        except Exception:
-            pass
-
         self.get_logger().info(
             f'녹화 종료 ({reason}) — {os.path.basename(self._bag_path or "")} '
             f'[{dur:.1f}초, 여유 {self._free_gb():.1f}GB]'
@@ -299,12 +316,81 @@ class AutoRecordNode(Node):
                 pass
         self._close_rec_log()
 
+        # 디스크 기록은 메타·로그까지 모두 쓴 뒤에 합니다.
+        # 이 순서가 반대면 판정에 쓰는 _meta.json 과 _record.log 가
+        # 아직 메모리에만 있는 상태로 전원이 내려갈 수 있습니다.
+        try:
+            subprocess.run(['sync'], timeout=10)
+        except Exception:
+            pass
+
         self._proc       = None
         self._start_time = None
+        self._safe_since = time.monotonic()
+        self.get_logger().info(
+            '저장 완료 — 지금부터 전원을 내려도 안전합니다 '
+            f'({os.path.basename(self._bag_path or "")})')
+
+        # 저장이 끝난 뒤 별도 스레드에서 검증합니다. 도중에 전원을 내려도
+        # 메타는 원자적으로 기록되므로 이전 내용이 깨지지 않습니다.
+        if self._bag_path and self._meta_path:
+            threading.Thread(target=self._verify_flight,
+                             args=(self._bag_path, self._meta_path),
+                             daemon=True).start()
         return True
+
+    def _verify_flight(self, bag_path, meta_path):
+        """
+        착륙 직후 verify_bag 판정을 돌려 해당 비행의 메타에 기록합니다.
+
+        검증 중에 다시 arm 하면 새 녹화의 메타가 '현재 메타' 가 되므로,
+        반드시 넘겨받은 이 비행의 경로에만 씁니다.
+        """
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            path = os.path.join(get_package_share_directory('drone_sensors'), 'scripts')
+            if path not in sys.path:
+                sys.path.insert(0, path)
+            import verify_bag
+            r = verify_bag.verify(bag_path, with_arm=False)
+        except Exception as e:
+            self.get_logger().warn(f'자동 검증 건너뜀 ({e}) — 필요하면 verify_bag 으로 확인하세요')
+            return
+
+        result = {
+            'drone':    r['drone_level'],
+            'reasons':  r['drone_reasons'][:5],
+            'sensors':  r['sensor_state'],
+            'unclosed': r['unclosed'],
+            'checked_at': datetime.now().isoformat(timespec='seconds'),
+        }
+        try:
+            meta = json.load(open(meta_path, encoding='utf-8'))
+            meta['verify'] = result
+            tmp = meta_path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, meta_path)
+        except Exception as e:
+            self.get_logger().warn(f'검증 결과 기록 실패: {e}')
+            return
+
+        lacking = [g for g, s in result['sensors'].items() if s != '정상']
+        text = (f"비행 검증 — 드론 {result['drone']}"
+                + (f" ({', '.join(result['reasons'][:2])})" if result['reasons'] else '')
+                + (f" / 외부센서 확인 필요: {', '.join(lacking)}" if lacking else ' / 외부센서 전부 정상'))
+        (self.get_logger().info if result['drone'] == '정상' and not lacking
+         else self.get_logger().warn)(text)
 
     def _close_rec_log(self):
         if self._rec_log_fh:
+            try:
+                self._rec_log_fh.flush()
+                os.fsync(self._rec_log_fh.fileno())
+            except Exception:
+                pass
             try:
                 self._rec_log_fh.close()
             except Exception:
@@ -401,6 +487,49 @@ class AutoRecordNode(Node):
             self._stop_timer.cancel()
             self._stop_timer = None
         self.stop_recording('disarmed')
+
+    # ── 코드 버전 ─────────────────────────────────────────────────────
+    def _software_version(self):
+        """
+        이 데이터를 어느 커밋으로 수집했는지 기록합니다.
+        여러 모듈을 운용하면 모듈마다 코드 버전이 다를 수 있어,
+        나중에 데이터셋을 정리할 때 수집 조건을 구분하는 기준이 됩니다.
+        """
+        ws = os.environ.get('ANOMALY_WS', os.path.expanduser('~/anomaly_sensor_ros2'))
+        info = {'commit': None, 'dirty': None}
+        try:
+            r = subprocess.run(['git', '-C', ws, 'rev-parse', '--short', 'HEAD'],
+                               capture_output=True, timeout=5)
+            if r.returncode == 0:
+                info['commit'] = r.stdout.decode().strip()
+                s = subprocess.run(['git', '-C', ws, 'status', '--porcelain', '--untracked-files=no'],
+                                   capture_output=True, timeout=5)
+                info['dirty'] = bool(s.stdout.strip())
+        except Exception:
+            pass
+        return info
+
+    # ── rosbag 옵션 지원 여부 확인 ────────────────────────────────────
+    def _supported_record_options(self):
+        """
+        `ros2 bag record` 가 지원하는 옵션만 씁니다.
+
+        없는 옵션을 넘기면 녹화 자체가 실패하므로, 시작할 때 한 번
+        도움말에서 확인합니다. 확인에 실패하면 옵션을 붙이지 않습니다.
+        """
+        try:
+            r = subprocess.run(['ros2', 'bag', 'record', '--help'],
+                               capture_output=True, timeout=20)
+            help_text = (r.stdout + r.stderr).decode('utf-8', 'ignore')
+        except Exception as e:
+            self.get_logger().warn(f'rosbag 옵션 확인 실패 ({e}) — 기본 옵션만 사용')
+            return set()
+        opts = {o for o in ('--max-bag-duration', '--max-cache-size') if o in help_text}
+        missing = {'--max-bag-duration', '--max-cache-size'} - opts
+        if missing:
+            self.get_logger().warn(
+                f'이 ROS2 버전이 지원하지 않는 옵션: {", ".join(sorted(missing))}')
+        return opts
 
     # ── 센서 상태 수신 ────────────────────────────────────────────────
     def _cb_health(self, msg):
@@ -503,6 +632,8 @@ class AutoRecordNode(Node):
             'elapsed_s': round(elapsed, 1),
             'free_gb':   round(self._free_gb(), 2),
             'sensors':   (self._health or {}).get('groups', {}),
+            # 녹화가 없고 마지막 저장이 끝났으면 전원을 내려도 안전합니다
+            'safe_power_off': (not recording) and self._safe_since is not None,
         }
         m = String(); m.data = json.dumps(payload)
         self.pub_status.publish(m)
@@ -533,6 +664,7 @@ class AutoRecordNode(Node):
             'free_gb':        round(self._free_gb(), 2),
             'topics':         len(self.topics),
             'record_log':     f'{name}_record.log',
+            'software':       self._software,
         }
         self._meta = meta
         self._meta_path = os.path.join(self.save_dir, f'{name}_meta.json')
@@ -549,7 +681,15 @@ class AutoRecordNode(Node):
             tmp = self._meta_path + '.tmp'
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(self._meta, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())             # 내용을 디스크에 확정
             os.replace(tmp, self._meta_path)     # 쓰는 도중 전원이 끊겨도 깨지지 않게
+            # 디렉터리 항목(파일 이름)도 확정해야 이름 바꾸기가 살아남습니다
+            d = os.open(os.path.dirname(self._meta_path) or '.', os.O_RDONLY)
+            try:
+                os.fsync(d)
+            finally:
+                os.close(d)
         except Exception as e:
             self.get_logger().warn(f'메타데이터 기록 실패: {e}')
 

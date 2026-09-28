@@ -39,7 +39,7 @@ class RespeakerFullNode(Node):
         super().__init__('respeaker_full_node')
 
         # ── 파라미터 ──────────────────────────────────────────────────
-        self.declare_parameter('update_rate',         50.0)
+        self.declare_parameter('update_rate',         25.0)   # USB 제어 전송 2회/틱
         self.declare_parameter('device_name',         'ReSpeaker')
         self.declare_parameter('reconnect_delay_sec', 3.0)
         self.declare_parameter('max_read_fail',       20)
@@ -267,7 +267,9 @@ class RespeakerFullNode(Node):
 
             raw = stream.read(self.CHUNK, exception_on_overflow=False)
 
-            m = UInt8MultiArray(); m.data = list(raw)
+            # bytes 를 그대로 넣습니다. list 로 바꾸면 rclpy 가 12,288개 원소를
+            # 하나씩 타입 검사하므로 불필요한 부하가 생깁니다.
+            m = UInt8MultiArray(); m.data = raw
             self.pub_audio.publish(m)
 
             samples = np.frombuffer(raw, dtype=np.int16)

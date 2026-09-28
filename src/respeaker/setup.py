@@ -19,7 +19,6 @@ setup(
     license='MIT',
     entry_points={
         'console_scripts': [
-            'respeaker_node = respeaker.respeaker_node:main',
             'respeaker_full_node = respeaker.respeaker_full_node:main',
         ],
     },

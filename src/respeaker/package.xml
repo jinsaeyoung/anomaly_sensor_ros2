@@ -19,4 +19,7 @@
   <export>
     <build_type>ament_python</build_type>
   </export>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-pyaudio</exec_depend>
+  <exec_depend>python3-usb</exec_depend>
 </package>

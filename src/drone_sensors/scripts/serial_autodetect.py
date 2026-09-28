@@ -416,7 +416,16 @@ def probe_fc(port, bauds=FC_BAUDS, verbose=False):
         try:
             # HEARTBEAT 는 1Hz 이므로 최대 2.5초 기다립니다.
             # 비행제어기 HEARTBEAT 를 받으면 즉시 종료합니다.
+            # 조기 종료 판정은 버퍼 전체를 다시 파싱하므로 자주 하면 비쌉니다.
+            # (921600bps 에서 2.5초면 200KB 이상 — 매번 파싱하면 탐지가 느려짐)
+            # 0.3초 간격으로만 확인합니다.
+            last = [time.monotonic()]
+
             def got_autopilot(b):
+                now = time.monotonic()
+                if now - last[0] < 0.3:
+                    return False
+                last[0] = now
                 return summarize_link(parse_mavlink(b))['target'] is not None
 
             buf = _read_for(ser, 2.5, stop=got_autopilot)

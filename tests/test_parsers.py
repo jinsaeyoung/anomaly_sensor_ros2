@@ -563,6 +563,44 @@ class TestPortClaim(unittest.TestCase):
         self.assertNotIn(os.path.realpath(self.dev), self.sa.claimed_ports())
 
 
+class TestPackagingConsistency(unittest.TestCase):
+    """
+    패키지 안의 사본이 원본(scripts/)과 같은지
+
+    노드는 설치된 사본을 import 합니다. 원본만 고치고 fix_packaging.sh 를
+    다시 돌리지 않은 채 커밋하면 실행 시 옛 코드가 쓰이므로 여기서 잡습니다.
+    """
+
+    def test_packaged_copies_match(self):
+        import filecmp
+        checked = 0
+        for mod in ('serial_autodetect.py', 'verify_bag.py'):
+            src = os.path.join(ROOT, 'scripts', mod)
+            pkg = os.path.join(ROOT, 'src', 'drone_sensors', 'scripts', mod)
+            if os.path.exists(src) and os.path.exists(pkg):
+                self.assertTrue(filecmp.cmp(src, pkg, shallow=False),
+                                f'{mod} 사본이 원본과 다름 — bash fix_packaging.sh 후 커밋하세요')
+                checked += 1
+        if not checked:
+            self.skipTest('저장소 구조가 아님')
+
+    def test_verify_bag_importable_from_thread(self):
+        """녹화 노드가 착륙 후 별도 스레드에서 verify_bag 을 불러올 수 있어야 함"""
+        import threading
+        err = []
+
+        def load():
+            try:
+                _load('vb_thread', 'scripts/verify_bag.py')
+            except unittest.SkipTest:
+                pass
+            except Exception as e:
+                err.append(e)
+        th = threading.Thread(target=load)
+        th.start(); th.join()
+        self.assertEqual(err, [], f'스레드에서 import 실패: {err}')
+
+
 class TestVerifyBag(unittest.TestCase):
     """녹화 검증: 드론 판정과 외부센서 표기 규칙"""
 
