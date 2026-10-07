@@ -66,6 +66,13 @@ def _stub_if_missing():
         p.get_package_share_directory = lambda n: '/nonexistent'
 
 
+# 비행 후 분석에만 쓰는 라이브러리 → 설치 패키지 이름
+OPTIONAL_LIBS = {
+    'pandas': 'pandas',
+    'matplotlib': 'matplotlib',
+}
+
+
 def _load(name, *relpaths):
     """저장소 구조(scripts/, src/...)와 평면 배치 모두에서 파일을 찾아 불러옵니다."""
     for rel in relpaths + (os.path.basename(relpaths[0]),):
@@ -75,7 +82,17 @@ def _load(name, *relpaths):
                 _stub_if_missing()
                 spec = importlib.util.spec_from_file_location(name, path)
                 module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
+                try:
+                    spec.loader.exec_module(module)
+                except ModuleNotFoundError as e:
+                    # 분석 전용 라이브러리는 데이터 수집에 필요 없습니다.
+                    # 수집 전용 모듈에 없다고 테스트 전체를 실패시키면
+                    # update_drone 이 서비스를 재시작하지 않으므로, 이 경우만 건너뜁니다.
+                    if e.name in OPTIONAL_LIBS:
+                        raise unittest.SkipTest(
+                            f'{e.name} 미설치 — 분석 기능 테스트 건너뜀 '
+                            f'(필요하면: pip3 install {OPTIONAL_LIBS[e.name]})')
+                    raise
                 return module
     raise unittest.SkipTest(f'{relpaths[0]} 를 찾을 수 없음')
 
@@ -601,6 +618,64 @@ class TestPackagingConsistency(unittest.TestCase):
         self.assertEqual(err, [], f'스레드에서 import 실패: {err}')
 
 
+class TestBusyPortIdentification(unittest.TestCase):
+    """
+    사용 중인 포트는 열지 않고 점유 프로세스로 판별
+
+    서비스가 실행 중이면 THL100·WCM6800·FC 포트가 모두 사용 중이므로,
+    확인 명령(detect_serial)은 점유 프로세스로 장치를 알려줘야 합니다.
+    단, 노드 재탐색(find_port)에는 쓰면 안 됩니다 — 노드가 잘못된 포트를
+    잡고 있을 때 '그 노드가 쓰니 그 장치' 로 판단하게 되기 때문입니다.
+    """
+
+    def setUp(self):
+        self.sa = prod('sa')
+        self._saved = (self.sa.list_serial_ports, self.sa.ports_in_use, self.sa.port_owners,
+                       self.sa.probe_fc, self.sa._probe_9600)
+        self.sa.list_serial_ports = lambda: ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2']
+        self.sa.ports_in_use = lambda exclude_key=None: {'/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2'}
+        self.sa.port_owners = lambda: {
+            '/dev/ttyUSB0': {'pid': 1, 'proc': 'mavros_node', 'device': 'fc'},
+            '/dev/ttyUSB1': {'pid': 2, 'proc': 'thl100_node', 'device': 'thl100'},
+            '/dev/ttyUSB2': {'pid': 3, 'proc': 'wcm6800_node', 'device': 'wcm6800'},
+        }
+        self.sa.probe_fc = lambda *a, **k: None
+        self.sa._probe_9600 = lambda p: (None, 0)
+        self._real = self.sa.os.path.realpath
+        self.sa.os.path.realpath = lambda p: p
+
+    def tearDown(self):
+        (self.sa.list_serial_ports, self.sa.ports_in_use, self.sa.port_owners,
+         self.sa.probe_fc, self.sa._probe_9600) = self._saved
+        self.sa.os.path.realpath = self._real
+
+    def test_check_command_identifies_all(self):
+        r = self.sa.detect_devices(identify_busy=True)
+        self.assertEqual((r.get('fc'), r.get('thl100'), r.get('wcm6800')),
+                         ('/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2'))
+        self.assertEqual(r['in_use']['thl100'], 'thl100_node')
+
+    def test_permission_denied_reported_not_mismatch(self):
+        """권한이 없어 열지 못한 포트를 '응답 없음(불일치)' 으로 보고하면 안 됨"""
+        saved = self.sa._open
+        def deny(port, baud):
+            self.sa.PERMISSION_DENIED.add(port)
+            raise PermissionError(13, 'Permission denied')
+        self.sa._open = deny
+        try:
+            self.sa._probe_9600 = self._saved[4]
+            key, _ = self.sa._probe_9600('/dev/ttyUSB9')
+            self.assertEqual(key, '__denied__')
+            self.assertIn('/dev/ttyUSB9', self.sa.PERMISSION_DENIED)
+        finally:
+            self.sa._open = saved
+            self.sa.PERMISSION_DENIED.clear()
+
+    def test_node_rediscovery_ignores_owners(self):
+        self.assertIsNone(self.sa.find_port('thl100'))
+        self.assertIsNone(self.sa.find_fc())
+
+
 class TestVerifyBag(unittest.TestCase):
     """녹화 검증: 드론 판정과 외부센서 표기 규칙"""
 
@@ -702,4 +777,10 @@ class TestVerifyBag(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    result = unittest.main(verbosity=2, exit=False).result
+    reasons = sorted({r for _, r in result.skipped if '미설치' in r})
+    if reasons:
+        print('\n[참고] 분석 라이브러리가 없어 일부 테스트를 건너뛰었습니다 (데이터 수집과는 무관):')
+        for r in reasons:
+            print('  -', r)
+    sys.exit(0 if result.wasSuccessful() else 1)

@@ -136,7 +136,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$RUN_USER
-SupplementaryGroups=dialout
+# dialout: 시리얼, audio: ReSpeaker 오디오 입력
+SupplementaryGroups=dialout audio
 WorkingDirectory=$WS
 
 Environment="HOME=$RUN_HOME"

@@ -204,40 +204,12 @@ fi
 export ROS_DOMAIN_ID=0
 
 # ── 4. udev 규칙 ──────────────────────────────────────────────────────
-head "[4/8] udev 규칙 설정"
+head "[4/8] 장치 권한 (udev·그룹·소유권)"
+bash "$(dirname "${BASH_SOURCE[0]}")/setup_permissions.sh"
 
-echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2886", MODE="0666"' | \
-    sudo tee /etc/udev/rules.d/60-respeaker.rules > /dev/null
-ok "ReSpeaker (2886) 권한 규칙"
+head "[5/8] (4단계에 통합됨)"
+ok "dialout·audio 그룹은 4단계에서 처리"
 
-# CH340 이 brltty 에 잡히지 않도록 명시적으로 제외
-sudo tee /etc/udev/rules.d/85-anomaly-serial.rules > /dev/null << 'EOF'
-# CH340 (FC USB-TTL 젠더) — brltty 가 점자 장치로 오인하지 않도록 제외
-ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", ENV{BRLTTY_BRAILLE_DRIVER}="", ENV{BRLTTY_NO_DRIVER}="1"
-EOF
-ok "CH340 brltty 제외 규칙"
-
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-ok "udev 규칙 재적용"
-
-# ── 5. dialout 그룹 ───────────────────────────────────────────────────
-head "[5/8] dialout 그룹"
-
-if id -nG "$RUN_USER" | tr ' ' '\n' | grep -qx dialout; then
-    ok "이미 등록됨"
-else
-    sudo usermod -aG dialout "$RUN_USER"
-    ok "등록 완료"
-    NEED_RELOGIN=1
-fi
-
-if ! groups | tr ' ' '\n' | grep -qx dialout; then
-    warn "현재 세션에는 미적용 — 재로그인 또는 'newgrp dialout' 필요"
-    NEED_RELOGIN=1
-fi
-
-# ── 6. 로그 파일 권한 ─────────────────────────────────────────────────
 head "[6/8] 로그 파일 권한"
 echo ""
 echo " systemd 의 append: 모드는 파일이 없으면 root 소유로 생성합니다."

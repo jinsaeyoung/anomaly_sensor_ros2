@@ -55,23 +55,23 @@ USB 장치가 많으므로 **외부 전원 공급형 USB 허브**를 권장합�
 
 ### 1단계 — ROS2 Humble 설치
 
-이미 설치되어 있으면 건너뜁니다.
+이미 설치되어 있으면 건너뜁니다. `install.sh`가 ROS2 apt 저장소를 확인하고, 없거나 키가 만료됐으면 자동으로 설정합니다.
 
 ```bash
 ls /opt/ros/humble/setup.bash        # 있으면 2단계로
 ```
 
+새로 설치할 때는 공식 문서의 현재 방식(ros2-apt-source 패키지)을 따릅니다. 예전의 키 파일을 직접 받는 방식은 키가 만료되면 패키지를 찾지 못합니다.
+
 ```bash
-sudo apt update && sudo apt install -y software-properties-common curl git
-sudo add-apt-repository universe -y
+sudo apt update && sudo apt install -y software-properties-common curl
+sudo add-apt-repository -y universe
 
-sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-  -o /usr/share/keyrings/ros-archive-keyring.gpg
+export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F'"' '{print $4}')
+curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo ${UBUNTU_CODENAME:-${VERSION_CODENAME}})_all.deb"
+sudo dpkg -i /tmp/ros2-apt-source.deb
 
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
-  | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-
-sudo apt update && sudo apt install -y ros-humble-ros-base python3-argcomplete
+sudo apt update && sudo apt install -y ros-humble-ros-base ros-dev-tools
 ```
 
 ### 2단계 — 저장소 클론 및 설치
@@ -111,7 +111,20 @@ update_drone          # (설치 후 사용 가능) pull → 패키징 → 빌드
 
 처음 설치하는 모듈이라 `update_drone`이 아직 없다면 `git pull` 후 `bash install.sh`를 실행하세요.
 
-`install.sh`가 의존성 설치(mavros, pyserial, pandas 등), udev 규칙, 워크스페이스 빌드, 편의 alias 등록까지 처리합니다. 여러 번 실행해도 안전합니다.
+`install.sh`가 의존성 설치(mavros, pyserial, pandas 등), 장치 권한, 워크스페이스 빌드, 편의 alias 등록까지 처리합니다. 여러 번 실행해도 안전합니다.
+
+> **`sudo bash install.sh`로 실행하지 마세요.** 파일이 root 소유가 되고 alias가 root 계정에 등록되어 이후 계속 권한 문제가 생깁니다. 일반 사용자로 실행하면 필요한 단계에서만 비밀번호를 묻습니다. 예전에 sudo로 실행한 흔적이 있으면 자동으로 정리합니다.
+
+#### 장치 권한
+
+USB 시리얼 장치(FC·THL100·WCM6800 젠더)와 ReSpeaker에 udev 규칙으로 직접 권한을 주므로, **설치 직후 재로그인 없이** 바로 쓸 수 있습니다. 그룹(`dialout`, `audio`)만으로는 추가 후 재로그인해야 적용되어, 새 모듈에서 설치 직후 확인 명령이 `Permission denied`로 실패했습니다.
+
+```bash
+fix_permissions          # 권한 설정 + 점검 (문제가 생겼을 때 다시 실행)
+fix_permissions check    # 점검만
+```
+
+이 모듈은 데이터 수집 전용 장비이므로 장치 권한을 여는 쪽을 택했습니다.
 
 ### 3단계 — 온보드 환경 설정
 
@@ -249,7 +262,11 @@ FC 연결과 녹화 대기 상태가 자동으로 잡히면 완료입니다. 이
 
 | 증상 | 확인 |
 |---|---|
-| 설치 직후 시리얼 권한 오류 | 재로그인했는지 (`groups \| grep dialout`) |
+| `detect_serial`에 `권한 없음` / `Permission denied` | 장치 권한 미설정 (새 모듈, 설치 중단 등) | `fix_permissions` — 재로그인 불필요. 서비스는 영향 없음 |
+| `detect_serial`이 모든 포트를 '사용 중'으로만 표시 | 서비스 실행 중 (이전 버전) | 점유 프로세스로 판별해 표시 (적용됨) |
+| `Unable to locate package ros-humble-mavros` (다른 ROS 패키지는 설치됨) | **2026-09 현재 Humble 저장소에서 mavros·mavros_extras·libmavconn이 빠짐** ([mavlink/mavros#2293](https://github.com/mavlink/mavros/issues/2293)) | `install.sh`가 ROS 공식 스냅샷(2026-08-07)에서 네 패키지를 같은 버전으로 설치하고 고정(hold). 다른 날짜: `MAVROS_SNAPSHOT=YYYY-MM-DD bash install.sh` |
+| `Unable to locate package ros-humble-*` (전부) | ROS2 apt 저장소가 없거나 예전 방식의 키가 만료됨 | `install.sh`가 자동 설정 (ros2-apt-source). 수동: 1단계 참고 |
+| 설치 직후 시리얼 권한 오류 | `fix_permissions` 실행 (재로그인 불필요) |
 | `monitor_drone`에 아무것도 안 보임 | `echo $ROS_DOMAIN_ID` 가 `0` 인지 |
 | FC만 연결 안 됨 | `detect_serial`로 인식 확인, brltty 제거 여부 |
 | 특정 토픽만 안 옴 | SR2 파라미터 설정 확인 |
@@ -317,6 +334,7 @@ anomaly_sensor_ros2/
 │   ├── start_onboard.sh       # 온보드 자동 실행 (systemd 호출)
 │   ├── install_service.sh     # 부팅 자동 실행 서비스 등록
 │   ├── setup_onboard_env.sh   # 온보드 환경 일괄 설정
+│   ├── setup_permissions.sh   # 장치 권한 (udev·그룹·소유권) — fix_permissions
 │   ├── check_time_sync.sh     # 시간 동기화 확인
 │   ├── guard_service.sh       # 수동 실행 시 서비스 충돌 방지
 │   └── watch_fcu.sh           # fc_status 본체
@@ -327,6 +345,29 @@ anomaly_sensor_ros2/
 ├── install.sh                 # 전체 환경 자동 설치
 ├── .gitignore
 └── README.md
+```
+
+---
+
+## mavros 설치 관련 (2026-09 현재)
+
+Humble(Jammy) apt 저장소에서 `ros-humble-mavros`, `ros-humble-mavros-extras`, `ros-humble-libmavconn`이 빠지고 `ros-humble-mavros-msgs`(2.15.1)만 남아 있습니다([mavlink/mavros#2293](https://github.com/mavlink/mavros/issues/2293)). 새 모듈에서는 `apt install ros-humble-mavros`가 실패합니다.
+
+`install.sh`가 이를 자동으로 처리합니다.
+
+| 상황 | 동작 |
+|---|---|
+| mavros 이미 설치됨 | 그대로 사용. 저장소에 mavros가 없으면 **현재 버전 고정(hold)** — `apt upgrade`가 mavros_msgs만 올려 짝이 깨지는 것을 방지 |
+| 저장소에 mavros 있음 | 정상 설치 |
+| 저장소에 mavros 없음 | ROS 공식 스냅샷(`snapshots.ros.org`, 2026-08-07)을 잠시 추가해 **네 패키지를 같은 버전으로** 설치하고 고정. 스냅샷 목록은 바로 제거 |
+
+mavros는 mavros_msgs와 함께 빌드된 짝이라, mavros만 옛 버전이고 mavros_msgs가 최신이면 실행 중 문제가 생길 수 있습니다. 그래서 네 패키지를 함께 맞추고 고정합니다.
+
+저장소가 복구되면 고정을 풀고 올리면 됩니다.
+
+```bash
+sudo apt-mark unhold ros-humble-mavros ros-humble-mavros-extras ros-humble-mavros-msgs ros-humble-libmavconn
+sudo apt update && sudo apt install --only-upgrade ros-humble-mavros ros-humble-mavros-extras ros-humble-mavros-msgs ros-humble-libmavconn
 ```
 
 ---
@@ -345,6 +386,7 @@ anomaly_sensor_ros2/
 | | `service_status` | 부팅 자동실행 여부 |
 | 장치 | `detect_serial` | FC·THL100·WCM6800 판별 (FC baud·SYSID·링크 구성원 포함) |
 | | `onboard_env` | 온보드 환경 설정 / `onboard_env check` 로 점검 |
+| | `fix_permissions` | 장치 권한 설정·점검 — udev·그룹·소유권 (재로그인 불필요) |
 | 녹화·분석 | `record_drone` | 수동 녹화 (`record_drone 30`) |
 | | `verify_bag` | 녹화 검증 — 드론 판정 + 외부센서 표기 (`--all`, `--csv`) |
 | | `bag_log` | 특정 bag 녹화 전후 로그 |
@@ -397,12 +439,19 @@ VID:PID나 by-id 경로에 의존하지 않고, 각 포트를 열어 **수신 �
 
 다른 프로세스가 이미 열고 있는 포트는 탐색에서 제외합니다. 실행 중인 노드의 포트를 열면 데이터를 빼앗아 양쪽이 모두 깨지기 때문입니다. 포트는 `exclusive` 모드로 열어 동시 점유도 막습니다.
 
-관리 노드는 mavros를 띄우기 **직전에** FC 포트를 선점 표시(`/tmp/anomaly_sensor_claims/`)합니다. mavros가 포트를 열기까지의 짧은 틈에 다른 노드가 먼저 열면 HEARTBEAT를 놓쳐 첫 연결이 실패하기 때문입니다. 표시한 프로세스가 죽으면 표시는 자동으로 무시됩니다.
+관리 노드는 mavros를 띄우기 **직전에** FC 포트를 선점 표시(`/tmp/anomaly_sensor_claims-<uid>/`, 사용자별)합니다. mavros가 포트를 열기까지의 짧은 틈에 다른 노드가 먼저 열면 HEARTBEAT를 놓쳐 첫 연결이 실패하기 때문입니다. 표시한 프로세스가 죽으면 표시는 자동으로 무시됩니다.
 
 센서 탐지에 실패하면 임의의 경로를 넣지 않고 `auto`로 두어 노드가 바로 재탐색합니다. 추측한 경로가 FC 포트와 겹치면 mavros 데이터를 빼앗을 수 있기 때문입니다.
 
 ```bash
 detect_serial     # 전체 장치 판별
+```
+
+서비스가 실행 중이면 모든 포트를 노드가 쓰고 있습니다. 이때는 포트를 열지 않고 **포트를 쓰는 프로세스로 판별**합니다(`thl100_node`가 잡은 포트 = THL100, `mavros_node`가 잡은 포트 = FC). 실행 중인 포트를 열면 데이터를 빼앗아 녹화가 깨지기 때문입니다. FC의 baud·SYSID는 이 경우 `fc_status`로 확인하세요.
+
+```
+  ✅ OSTSen-THL100 (온습도/조도)
+      /dev/ttyUSB1  (thl100_node 가 사용 중 — 정상 동작)
 ```
 
 ```
@@ -1466,7 +1515,7 @@ WCM6800 진단 [30s] rx=92 (3.07Hz) ok=92 fail=0
 | 부팅 후 mavros만 연결 실패, USB 재삽입하면 정상 | FC 전원 인가 중 젠더 재열거링 | `FC_STABLE_SEC` 안정화 대기 (적용됨) |
 | 서비스는 active인데 `monitor_drone`에 아무것도 안 보임 | 셸의 `ROS_DOMAIN_ID` 불일치 | `export ROS_DOMAIN_ID=0` (자동 등록됨) |
 | `ros2 node list`가 0개, 모니터가 비어 보임 | `ros2 daemon` 크래시 | 자동 복구됨. **녹화에는 영향 없음** |
-| 시리얼 `Permission denied` | `dialout` 그룹 미적용 | 재로그인 또는 `newgrp dialout` |
+| 시리얼 `Permission denied` | 장치 권한 미설정 | `fix_permissions` (재로그인 불필요) |
 | 수동 실행 시 mavros 크래시 | 서비스가 이미 구동 중 | `sudo systemctl stop anomaly-sensor` |
 | `onboard.log`에 `허가 거부` | systemd가 root 소유로 생성 | `setup_onboard_env.sh`가 자동 처리 |
 | `grep`이 로그를 "바이너리 파일"로 인식 | 로그 과대 | 50MB 초과 시 자동 로테이션. `grep -a` 사용 가능 |

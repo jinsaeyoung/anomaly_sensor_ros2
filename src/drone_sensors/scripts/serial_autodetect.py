@@ -302,7 +302,9 @@ def list_serial_ports():
 # /proc 확인만으로는 '아직 안 열린' 포트를 알 수 없으므로,
 # 관리 노드가 쓰기로 정한 포트를 파일로 표시해 다른 노드가 피하게 합니다.
 # 표시한 프로세스가 죽으면 표시는 자동으로 무시됩니다.
-CLAIM_DIR = '/tmp/anomaly_sensor_claims'
+# 사용자별 폴더 — 공용 폴더를 다른 사용자(root 등)가 먼저 만들면 쓰기가 막혀
+# 선점 표시가 조용히 무시됩니다. 서비스·노드·확인 명령은 같은 사용자로 실행됩니다.
+CLAIM_DIR = f'/tmp/anomaly_sensor_claims-{os.getuid()}'
 
 
 def claim_port(key, port):
@@ -361,15 +363,86 @@ def ports_in_use(exclude_key=None):
     return used | claimed_ports(exclude_key)
 
 
+# 프로세스 이름 → 장치 (점유 프로세스로 장치를 추정할 때 사용)
+OWNER_MAP = (
+    ('thl100_node', 'thl100'),
+    ('wcm6800_node', 'wcm6800'),
+    ('mavros_node', 'fc'),
+)
+
+
+def port_owners():
+    """
+    포트(실제 경로) → 점유 정보 {'pid', 'proc', 'device'}
+
+    실행 중인 노드가 포트를 잡고 있으면 포트를 열지 않고도
+    어느 장치인지 알 수 있습니다 (thl100_node 가 잡은 포트 = THL100).
+    관리 노드가 mavros 기동 전에 선점 표시한 FC 포트도 포함합니다.
+    """
+    owners = {}
+    me = str(os.getpid())
+    for fd_dir in glob.glob('/proc/[0-9]*/fd'):
+        pid = fd_dir.split('/')[2]
+        if pid == me:
+            continue
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        ttys = set()
+        for fd in fds:
+            try:
+                t = os.readlink(os.path.join(fd_dir, fd))
+            except OSError:
+                continue
+            if t.startswith('/dev/tty'):
+                ttys.add(os.path.realpath(t))
+        if not ttys:
+            continue
+        try:
+            with open(f'/proc/{pid}/cmdline', 'rb') as f:
+                cmd = f.read().replace(b'\0', b' ').decode('utf-8', 'ignore')
+        except OSError:
+            cmd = ''
+        device = next((d for key, d in OWNER_MAP if key in cmd), None)
+        proc = next((key for key, _ in OWNER_MAP if key in cmd), None) \
+            or (os.path.basename(cmd.split()[0]) if cmd.split() else f'pid {pid}')
+        for t in ttys:
+            owners.setdefault(t, {'pid': int(pid), 'proc': proc, 'device': device})
+
+    for path in glob.glob(os.path.join(CLAIM_DIR, '*')):
+        try:
+            pid, real = open(path).read().split()
+            os.kill(int(pid), 0)
+            owners.setdefault(real, {'pid': int(pid), 'proc': 'fcu_manager (선점)',
+                                     'device': os.path.basename(path)})
+        except (OSError, ValueError):
+            continue
+    return owners
+
+
+# 권한이 없어 열지 못한 포트 (실제 경로) — 결과에 원인과 해결책을 표시하기 위함
+PERMISSION_DENIED = set()
+
+
+def _is_permission_error(e):
+    return isinstance(e, PermissionError) or 'Errno 13' in str(e) or 'Permission denied' in str(e)
+
+
 def _open(port, baud):
     """탐색용 포트 열기 — exclusive 로 열어 다른 노드와 동시 점유를 막습니다."""
     kwargs = dict(port=port, baudrate=baud, bytesize=serial.EIGHTBITS,
                   parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE,
                   timeout=0.2)
     try:
-        return serial.Serial(exclusive=True, **kwargs)
-    except TypeError:
-        return serial.Serial(**kwargs)
+        try:
+            return serial.Serial(exclusive=True, **kwargs)
+        except TypeError:
+            return serial.Serial(**kwargs)
+    except Exception as e:
+        if _is_permission_error(e):
+            PERMISSION_DENIED.add(os.path.realpath(port))
+        raise
 
 
 def _read_for(ser, seconds, stop=None):
@@ -497,8 +570,8 @@ def _probe_9600(port):
     """9600 장치 두 종류를 한 번의 수신으로 함께 판별"""
     try:
         ser = _open(port, 9600)
-    except Exception:
-        return None, 0
+    except Exception as e:
+        return ('__denied__' if _is_permission_error(e) else '__open_fail__'), 0
     try:
         def done(b):
             return (_match_thl100(b) >= DEVICE_SIGNATURES['thl100']['min_hits'] or
@@ -524,12 +597,16 @@ def _probe_9600(port):
 # ══════════════════════════════════════════════════════════════════════════════
 # 전체 탐색
 # ══════════════════════════════════════════════════════════════════════════════
-def detect_devices(ports=None, exclude_busy=True, want=None, verbose=False):
+def detect_devices(ports=None, exclude_busy=True, want=None, verbose=False,
+                   identify_busy=False):
     """
     전체 포트를 스캔해 장치를 매칭
 
-    want         : 찾을 장치 목록 (기본 전체). 재탐색 시 필요한 것만 지정
-    exclude_busy : 다른 프로세스가 열고 있는 포트는 건너뜀
+    want          : 찾을 장치 목록 (기본 전체). 재탐색 시 필요한 것만 지정
+    exclude_busy  : 다른 프로세스가 열고 있는 포트는 건너뜀
+    identify_busy : 건너뛴 포트를 점유 프로세스로 판별 (확인 명령 전용).
+                    노드 재탐색에는 쓰지 않습니다 — 노드가 잘못된 포트를 잡고 있을 때
+                    '그 노드가 쓰니 그 장치' 로 판단하면 안 되기 때문입니다.
 
     반환: {'fc': port, 'thl100': port, 'wcm6800': port, 'fc_info': {...}}
     """
@@ -538,13 +615,30 @@ def detect_devices(ports=None, exclude_busy=True, want=None, verbose=False):
         ports = list_serial_ports()
 
     busy = ports_in_use() if exclude_busy else set()
+    owners = port_owners() if (identify_busy and busy) else {}
     result = {}
 
-    if verbose:
-        print(f'후보 포트 {len(ports)}개' + (f' (사용 중 {len(busy)}개 제외)' if busy else ''))
+    # 사용 중인 포트는 열지 않고 점유 프로세스로 판별
+    if identify_busy:
         for p in ports:
-            mark = '  [사용 중 — 건너뜀]' if os.path.realpath(p) in busy else ''
-            print(f'  {p}\n    → {os.path.realpath(p)}{mark}')
+            real = os.path.realpath(p)
+            o = owners.get(real)
+            if real in busy and o and o['device'] in want and o['device'] not in result:
+                result[o['device']] = p
+                result.setdefault('in_use', {})[o['device']] = o['proc']
+
+    if verbose:
+        n_busy = sum(os.path.realpath(p) in busy for p in ports)
+        print(f'후보 포트 {len(ports)}개' + (f' (사용 중 {n_busy}개)' if n_busy else ''))
+        for p in ports:
+            real = os.path.realpath(p)
+            if real in busy:
+                o = owners.get(real)
+                who = o['proc'] if o else '다른 프로그램'
+                mark = f'  [사용 중: {who}]'
+            else:
+                mark = ''
+            print(f'  {p}\n    → {real}{mark}')
         print()
 
     for port in ports:
@@ -558,6 +652,15 @@ def detect_devices(ports=None, exclude_busy=True, want=None, verbose=False):
         # 1) 9600 센서 — 빠르게 걸러냅니다
         if want & {'thl100', 'wcm6800'} - set(result):
             key, nbytes = _probe_9600(port)
+            if key == '__denied__':
+                # 권한이 없으면 어떤 속도로도 열 수 없으므로 FC 검사도 건너뜁니다
+                if verbose:
+                    print('    열기 실패: 권한 없음 (dialout 그룹 필요) → 건너뜀\n')
+                continue
+            if key == '__open_fail__':
+                if verbose:
+                    print('    열기 실패 → 건너뜀\n')
+                continue
             if key and key in want and key not in result:
                 result[key] = port
                 if verbose:
@@ -640,7 +743,8 @@ def main():
         sys.exit(0 if info else 1)
 
     as_json = '--json' in args
-    found = detect_devices(exclude_busy='--all' not in args, verbose=not as_json)
+    found = detect_devices(exclude_busy='--all' not in args, verbose=not as_json,
+                           identify_busy=True)
 
     if as_json:
         import json
@@ -650,15 +754,41 @@ def main():
     print('=' * 66)
     print(' 탐색 결과')
     print('=' * 66)
+    in_use = found.get('in_use', {})
     for key in ('fc', 'thl100', 'wcm6800'):
         name = DEVICE_SIGNATURES[key]['name']
         if key in found:
-            print(f'  ✅ {name}\n      {found[key]} → {os.path.realpath(found[key])}')
+            how = (f'{in_use[key]} 가 사용 중 — 정상 동작' if key in in_use
+                   else '데이터로 확인')
+            print(f'  ✅ {name}\n      {found[key]} → {os.path.realpath(found[key])}  ({how})')
         else:
             print(f'  ❌ {name} — 찾지 못함')
     if 'fc_info' in found:
         print()
         _print_fc(found['fc_info'])
+    elif 'fc' in in_use:
+        print('\n  FC 의 baud·SYSID 는 실행 중인 관리 노드에서 확인하세요: fc_status')
+    if in_use:
+        print()
+        print('  노드가 실행 중이라 포트를 열지 않고, 포트를 쓰는 프로세스로 판별했습니다.')
+        print('  (실행 중인 포트를 열면 데이터를 빼앗아 녹화가 깨집니다)')
+    if PERMISSION_DENIED:
+        import getpass, grp
+        user = getpass.getuser()
+        try:
+            in_group = user in grp.getgrnam('dialout').gr_mem
+        except KeyError:
+            in_group = False
+        active = 'dialout' in os.popen('id -nG').read().split()
+        print()
+        print(f'  ⚠ 권한이 없어 포트 {len(PERMISSION_DENIED)}개를 열지 못했습니다 — 장치 문제가 아닙니다.')
+        print('     해결 (재로그인 불필요):  fix_permissions')
+        print('                         또는 bash scripts/setup_permissions.sh')
+        if not in_group:
+            print(f'     ({user} 가 dialout 그룹에도 없습니다 — 위 명령이 함께 처리합니다)')
+        elif not active:
+            print(f'     ({user} 는 dialout 그룹에 있지만 이 세션에는 아직 적용 전입니다)')
+        print('     서비스는 dialout 권한으로 실행되므로 자동 수집에는 영향이 없습니다.')
     print('=' * 66)
 
 
