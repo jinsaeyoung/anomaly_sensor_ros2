@@ -676,6 +676,56 @@ class TestBusyPortIdentification(unittest.TestCase):
         self.assertIsNone(self.sa.find_fc())
 
 
+class TestLocaleIndependence(unittest.TestCase):
+    """
+    시스템 언어가 한국어여도 설치 스크립트가 올바르게 판단해야 함
+
+    apt 는 언어에 따라 'Candidate:' 를 '후보:' 로 출력합니다. 영어만 가정하면
+    한국어 PC 에서 저장소가 있는데도 없다고 판단해 설치가 멈춥니다.
+    """
+
+    def _script(self, name):
+        for cand in (os.path.join(ROOT, name), os.path.join(ROOT, 'scripts', name),
+                     os.path.join(HERE, '..', name)):
+            if os.path.exists(cand):
+                with open(cand, encoding='utf-8') as f:
+                    return f.read()
+        self.skipTest(f'{name} 없음')
+
+    def test_apt_parsing_uses_c_locale(self):
+        import re
+        src = self._script('install.sh')
+        # 출력 문구를 해석하는 apt-cache 호출은 모두 언어 고정 함수를 거쳐야 함
+        raw = [l for l in src.splitlines()
+               if re.search(r'apt-cache (policy|madison)', l)
+               and not l.strip().startswith('#') and 'LC_ALL=C' not in l]
+        self.assertEqual(raw, [], f'언어 고정 없이 apt 출력을 해석: {raw}')
+
+    def test_repo_check_with_korean_apt(self):
+        """이 PC 와 같은 한국어 출력에서 저장소를 '있음' 으로 판정"""
+        import re, subprocess, stat
+        src = self._script('install.sh')
+        fn = '\n'.join(re.findall(r'^apt_policy\(\).*$', src, re.M)) + '\n' + \
+             re.search(r'^ros_repo_ok\(\) \{.*?^\}', src, re.M | re.S).group(0)
+        d = tempfile.mkdtemp()
+        fake = os.path.join(d, 'apt-cache')
+        with open(fake, 'w') as f:
+            f.write('#!/bin/sh\n'
+                    'if [ "$LC_ALL" = C ]; then echo "  Candidate: 3.3.22-1jammy"; '
+                    'else echo "  후보: 3.3.22-1jammy"; fi\n')
+        os.chmod(fake, 0o755)
+        env = dict(os.environ, PATH=d + os.pathsep + os.environ['PATH'],
+                   LANG='ko_KR.UTF-8', ROS_DISTRO='humble')
+        env.pop('LC_ALL', None)
+        r = subprocess.run(['bash', '-c', fn + '\nros_repo_ok'], env=env)
+        self.assertEqual(r.returncode, 0, '한국어 환경에서 저장소를 찾지 못함')
+
+    def test_time_sync_not_text_parsing(self):
+        src = self._script('check_time_sync.sh')
+        self.assertNotIn('System clock synchronized', src.replace('# ', '#'),
+                         'timedatectl 문구는 언어에 따라 바뀜 — show -p NTPSynchronized 사용')
+
+
 class TestVerifyBag(unittest.TestCase):
     """녹화 검증: 드론 판정과 외부센서 표기 규칙"""
 

@@ -8,7 +8,10 @@ echo "=========================================="
 echo " 시간 동기화 상태 확인"
 echo "=========================================="
 
-SYNCED=$(timedatectl status | grep "System clock synchronized" | awk '{print $NF}')
+# 'timedatectl status' 문구는 시스템 언어를 따르므로(한국어: '시스템 시계 동기화됨')
+# 언어와 무관한 속성 값(yes/no)을 읽습니다.
+synced() { timedatectl show -p NTPSynchronized --value 2>/dev/null; }
+SYNCED=$(synced)
 CURRENT_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 
 echo "현재 시스템 시각: $CURRENT_TIME"
@@ -28,7 +31,7 @@ if ping -c 1 -W 1 1.1.1.1 > /dev/null 2>&1; then
     sudo systemctl restart systemd-timesyncd 2>/dev/null
 
     sleep 3
-    SYNCED_RETRY=$(timedatectl status | grep "System clock synchronized" | awk '{print $NF}')
+    SYNCED_RETRY=$(synced)
 
     if [ "$SYNCED_RETRY" = "yes" ]; then
         echo "✅ 동기화 완료 — 현재 시각: $(date '+%Y-%m-%d %H:%M:%S')"

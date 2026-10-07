@@ -45,8 +45,14 @@ echo "[2/8] 시스템 의존성 설치..."
 # ROS2 는 설치돼 있어도 apt 저장소가 없거나(소스 설치 등) 예전 방식의 키가
 # 만료되면 ros-humble-mavros 를 찾지 못합니다.
 # 공식 문서의 현재 방식(ros2-apt-source 패키지)으로 저장소를 설정합니다.
+# apt 출력은 시스템 언어를 따릅니다 (한국어: 'Candidate:' → '후보:', 'Err:' → '오류:').
+# 출력 문구를 해석하는 곳은 언어를 영어로 고정해야 환경과 무관하게 판단할 수 있습니다.
+apt_policy()  { LC_ALL=C apt-cache policy "$@" 2>/dev/null; }
+apt_madison() { LC_ALL=C apt-cache madison "$@" 2>/dev/null; }
+apt_get_c()   { sudo env LC_ALL=C apt-get "$@"; }
+
 ros_pkg_available() {
-    apt-cache policy "ros-$ROS_DISTRO-mavros" 2>/dev/null | grep -q "Candidate: [0-9]"
+    apt_policy "ros-$ROS_DISTRO-mavros" | grep -q "Candidate: [0-9]"
 }
 
 APT_ETC="${APT_ETC:-/etc/apt}"
@@ -54,14 +60,15 @@ APT_ETC="${APT_ETC:-/etc/apt}"
 apt_update_verbose() {
     # 스크립트에서는 apt 대신 apt-get 을 씁니다 (apt 는 CLI 가 고정되지 않았다는 경고를 냄).
     # -qq 로 숨기면 키 만료·중복 등록 오류가 보이지 않으므로 오류·경고 줄만 보여줍니다.
-    sudo apt-get update 2>&1 | grep -E "^(E|W|Err):|NO_PUBKEY|EXPKEYSIG|Conflicting values" \
+    apt_get_c update 2>&1 | grep -E "^(E|W|Err):|NO_PUBKEY|EXPKEYSIG|Conflicting values" \
         | sed 's/^/    /' || true
 }
 
 ros_source_entries() {
     # packages.ros.org/ros2 를 가리키는 모든 저장소 항목 (파일:줄)
     # (apt 는 .list/.sources 로 끝나는 파일만 읽으므로 비활성화한 파일은 제외)
-    grep -rsn "packages.ros.org/ros2" "$APT_ETC/sources.list" "$APT_ETC/sources.list.d/" 2>/dev/null \
+    # 공식 설정(ros2.sources)은 심볼릭 링크라 grep -r 로는 찾지 못합니다 → -R
+    grep -Rsn "packages.ros.org/ros2" "$APT_ETC/sources.list" "$APT_ETC/sources.list.d/" 2>/dev/null \
         | grep -v ':#' | grep -v 'disabled-by-anomaly' || true
 }
 
@@ -153,10 +160,10 @@ diagnose_ros_apt() {
     esac
     if ! ls /var/lib/apt/lists/ 2>/dev/null | grep -q "packages.ros.org.*binary-${arch}_Packages"; then
         echo "     → 원인: ROS 저장소의 ${arch} 패키지 목록을 받지 않았습니다."
-        echo "       확인: grep -r Architectures /etc/apt/apt.conf.d/ /etc/apt/sources.list.d/"
+        echo "       확인: grep -R Architectures /etc/apt/apt.conf.d/ /etc/apt/sources.list.d/"
         return
     fi
-    if ! apt-cache policy "ros-$ROS_DISTRO-rclpy" 2>/dev/null | grep -q "Candidate: [0-9]"; then
+    if ! apt_policy "ros-$ROS_DISTRO-rclpy" | grep -q "Candidate: [0-9]"; then
         echo "     → 원인: ROS 패키지 목록이 손상된 것으로 보입니다. 다시 받으세요:"
         echo "       sudo rm -f /var/lib/apt/lists/packages.ros.org_* && sudo apt update"
         return
@@ -166,7 +173,7 @@ diagnose_ros_apt() {
 
 ros_repo_ok() {
     # mavros 대신 항상 있는 패키지로 저장소 동작 여부를 판단합니다
-    apt-cache policy "ros-$ROS_DISTRO-rclpy" 2>/dev/null | grep -q "Candidate: [0-9]"
+    apt_policy "ros-$ROS_DISTRO-rclpy" | grep -q "Candidate: [0-9]"
 }
 
 disable_duplicate_ros_sources_if_official() {
@@ -218,7 +225,7 @@ install_mavros_from_snapshot() {
     # mavros 만 옛 버전이고 mavros_msgs 가 최신이면 짝이 맞지 않아 실행 중 문제가 생길 수 있습니다.
     local args=() pkg ver
     for pkg in $MAVROS_PKGS; do
-        ver=$(apt-cache madison "$pkg" 2>/dev/null | grep "snapshots.ros.org" | head -n1 | awk -F'|' '{gsub(/ /,"",$2); print $2}')
+        ver=$(apt_madison "$pkg" | grep "snapshots.ros.org" | head -n1 | awk -F'|' '{gsub(/ /,"",$2); print $2}')
         if [ -z "$ver" ]; then
             echo "  ❌ 스냅샷에서 $pkg 를 찾을 수 없습니다 (스냅샷 날짜: $MAVROS_SNAPSHOT)"
             sudo rm -f "$list"; sudo apt update -qq 2>/dev/null || true
