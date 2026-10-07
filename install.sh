@@ -49,18 +49,49 @@ ros_pkg_available() {
     apt-cache policy "ros-$ROS_DISTRO-mavros" 2>/dev/null | grep -q "Candidate: [0-9]"
 }
 
+APT_ETC="${APT_ETC:-/etc/apt}"
+
 apt_update_verbose() {
-    # -qq 로 숨기면 키 만료(EXPKEYSIG)·키 없음(NO_PUBKEY) 경고가 보이지 않습니다
-    sudo apt update 2>&1 | grep -E "NO_PUBKEY|EXPKEYSIG|is not signed|Conflicting values|W: |E: " \
+    # 스크립트에서는 apt 대신 apt-get 을 씁니다 (apt 는 CLI 가 고정되지 않았다는 경고를 냄).
+    # -qq 로 숨기면 키 만료·중복 등록 오류가 보이지 않으므로 오류·경고 줄만 보여줍니다.
+    sudo apt-get update 2>&1 | grep -E "^(E|W|Err):|NO_PUBKEY|EXPKEYSIG|Conflicting values" \
         | sed 's/^/    /' || true
+}
+
+ros_source_entries() {
+    # packages.ros.org/ros2 를 가리키는 모든 저장소 항목 (파일:줄)
+    # (apt 는 .list/.sources 로 끝나는 파일만 읽으므로 비활성화한 파일은 제외)
+    grep -rsn "packages.ros.org/ros2" "$APT_ETC/sources.list" "$APT_ETC/sources.list.d/" 2>/dev/null \
+        | grep -v ':#' | grep -v 'disabled-by-anomaly' || true
+}
+
+disable_duplicate_ros_sources() {
+    # 같은 ROS 저장소가 다른 키로 두 번 등록되면 apt 가
+    # 'Conflicting values set for option Signed-By' 로 저장소 설정 전체를 읽지 못합니다.
+    # 공식 설정(ros2.sources) 외의 항목은 지우지 않고 비활성화해 보관합니다.
+    local f
+    for f in "$APT_ETC"/sources.list.d/*; do
+        [ -f "$f" ] || continue
+        case "$(basename "$f")" in ros2.sources|*.disabled-by-anomaly) continue ;; esac
+        if grep -qs "packages.ros.org/ros2" "$f"; then
+            sudo mv "$f" "$f.disabled-by-anomaly"
+            echo "  - 중복 ROS 저장소 비활성화: $(basename "$f") → $(basename "$f").disabled-by-anomaly"
+        fi
+    done
+    if grep -qsE "^[[:space:]]*deb.*packages.ros.org/ros2" "$APT_ETC/sources.list"; then
+        sudo sed -i.bak-anomaly -E 's|^([[:space:]]*deb.*packages.ros.org/ros2.*)$|# (anomaly install: 중복 비활성화) \1|' \
+            "$APT_ETC/sources.list"
+        echo "  - sources.list 의 중복 ROS 항목 주석 처리 (백업: sources.list.bak-anomaly)"
+    fi
 }
 
 setup_ros_apt_source() {
     echo "  ROS2 apt 저장소를 설정합니다 (공식 방식: ros2-apt-source)"
     # 예전 방식의 목록·키가 남아 있으면 같은 저장소가 다른 키로 두 번 등록돼 충돌합니다
-    sudo rm -f /etc/apt/sources.list.d/ros2.list /etc/apt/sources.list.d/ros2-latest.list
+    sudo rm -f "$APT_ETC/sources.list.d/ros2.list" "$APT_ETC/sources.list.d/ros2-latest.list"
     sudo rm -f /usr/share/keyrings/ros-archive-keyring.gpg
-    sudo apt install -y curl software-properties-common > /dev/null
+    disable_duplicate_ros_sources
+    sudo apt-get install -y curl software-properties-common > /dev/null
     sudo add-apt-repository -y universe > /dev/null 2>&1 || true
 
     local ver codename
@@ -89,8 +120,28 @@ diagnose_ros_apt() {
     foreign=$(dpkg --print-foreign-architectures | tr '\n' ' ')
     cpu=$(uname -m)
     echo ""
-    echo "  ❌ 저장소를 설정했지만 ros-$ROS_DISTRO-mavros 를 찾을 수 없습니다. 진단:"
+    echo "  ❌ 저장소를 설정했지만 ROS 패키지(ros-$ROS_DISTRO-rclpy)를 찾을 수 없습니다. 진단:"
     echo "     CPU: $cpu / 설치된 OS(dpkg): $arch / 추가 아키텍처: ${foreign:-없음}"
+    echo "     등록된 ROS 저장소:"
+    ros_source_entries | sed 's/^/       /'
+    [ -z "$(ros_source_entries)" ] && echo "       (없음)"
+    local errs
+    errs=$(sudo apt-get update 2>&1 | grep -E "^(E|W|Err):" | grep -i "ros\|Signed-By\|Conflicting" | head -n 5)
+    if [ -n "$errs" ]; then
+        echo "     apt 오류:"
+        echo "$errs" | sed 's/^/       /'
+    fi
+    if echo "$errs" | grep -q "Conflicting values"; then
+        echo ""
+        echo "     → 원인: 같은 ROS 저장소가 서로 다른 키로 두 번 등록돼 있습니다."
+        echo "       위 '등록된 ROS 저장소' 중 ros2.sources 외의 항목을 지우고 다시 실행하세요."
+        return
+    fi
+    if echo "$errs" | grep -qiE "Could not resolve|Failed to fetch|Temporary failure|Connection"; then
+        echo ""
+        echo "     → 원인: packages.ros.org 에 접속하지 못했습니다 (인터넷·프록시·방화벽 확인)."
+        return
+    fi
     case "$arch" in
         amd64|arm64) ;;
         *)
@@ -118,10 +169,22 @@ ros_repo_ok() {
     apt-cache policy "ros-$ROS_DISTRO-rclpy" 2>/dev/null | grep -q "Candidate: [0-9]"
 }
 
+disable_duplicate_ros_sources_if_official() {
+    # 공식 설정이 이미 있다면, 다른 이름으로 남은 중복 항목이 문제일 수 있습니다
+    [ -f "$APT_ETC/sources.list.d/ros2.sources" ] && disable_duplicate_ros_sources
+}
+
+disable_duplicate_ros_sources_if_official
 apt_update_verbose
 if ! ros_repo_ok; then
     echo "  ⚠ ROS2 apt 저장소에서 패키지를 찾을 수 없습니다"
     setup_ros_apt_source
+    if ! ros_repo_ok; then
+        # 손상되거나 오래된 ROS 목록이 남아 있을 수 있어 한 번 지우고 다시 받습니다
+        echo "  ROS 패키지 목록을 다시 받습니다..."
+        sudo rm -f /var/lib/apt/lists/packages.ros.org_*
+        apt_update_verbose
+    fi
     if ! ros_repo_ok; then
         diagnose_ros_apt
         exit 1
