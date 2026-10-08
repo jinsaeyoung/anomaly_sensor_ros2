@@ -783,6 +783,62 @@ class TestMonitorRender(unittest.TestCase):
         self.assertIn('최근 녹화 3건', out)      # 다른 섹션은 계속 그려짐
 
 
+class TestShellSafety(unittest.TestCase):
+    """
+    set -e 셸 스크립트의 조용한 종료 방지
+
+    '[ 조건 ] && 명령' 을 함수 마지막 줄에 두면 조건이 거짓일 때 함수가 실패로
+    끝나 set -e 가 스크립트를 메시지 없이 멈춥니다. 실제로 install.sh 가
+    ros2.sources 가 없는 모듈에서 [2/8] 직후 아무 말 없이 종료됐습니다.
+    """
+
+    SCRIPTS = ('install.sh', 'fix_packaging.sh', 'scripts/install_service.sh')
+
+    def _sources(self):
+        import re
+        found = 0
+        for rel in self.SCRIPTS:
+            for base in (ROOT, os.path.join(HERE, '..')):
+                path = os.path.join(base, rel)
+                if not os.path.exists(path):
+                    path = os.path.join(base, os.path.basename(rel))
+                if os.path.exists(path):
+                    with open(path, encoding='utf-8') as f:
+                        src = f.read()
+                    if re.search(r'^set -[a-z]*e', src, re.M):
+                        found += 1
+                        yield rel, src
+                    break
+        if not found:
+            self.skipTest('셸 스크립트 없음')
+
+    def test_no_function_ends_with_and_list(self):
+        import re
+        bad = []
+        for rel, src in self._sources():
+            lines = src.splitlines()
+            i = 0
+            while i < len(lines):
+                m = re.match(r'^(\s*)([A-Za-z_]\w*)\(\)\s*\{\s*$', lines[i])
+                if m:
+                    j = i + 1
+                    while j < len(lines) and not re.match(rf'^{m.group(1)}\}}\s*$', lines[j]):
+                        j += 1
+                    body = [l.strip() for l in lines[i + 1:j]
+                            if l.strip() and not l.strip().startswith('#')]
+                    if body and '&&' in body[-1] and '||' not in body[-1]:
+                        bad.append(f'{rel}: {m.group(2)}() → {body[-1]}')
+                    i = j
+                i += 1
+        self.assertEqual(bad, [], '함수 마지막 줄이 && 목록 — if 문으로 바꾸세요')
+
+    def test_err_trap_reports_location(self):
+        import re
+        missing = [rel for rel, src in self._sources()
+                   if 'set -E' not in src or not re.search(r"trap '.*\$\{LINENO\}.*' ERR", src)]
+        self.assertEqual(missing, [], '멈춘 위치 표시(set -E + trap ERR) 없음')
+
+
 class TestVerifyBag(unittest.TestCase):
     """녹화 검증: 드론 판정과 외부센서 표기 규칙"""
 

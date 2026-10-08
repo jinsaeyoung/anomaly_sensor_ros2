@@ -5,6 +5,10 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 set -e
+# 어떤 명령이 실패해 멈추면 위치와 명령을 알려줍니다.
+# (set -e 는 실패한 명령을 알려주지 않아, 설치가 아무 메시지 없이 끝난 것처럼 보입니다)
+set -E
+trap 'rc=$?; echo ""; echo "❌ ${BASH_SOURCE[0]##*/} 가 ${LINENO}번째 줄에서 멈췄습니다 (종료 코드 $rc)"; echo "   실패한 명령: $BASH_COMMAND"; echo "   이 메시지를 그대로 알려주시면 원인을 바로 찾을 수 있습니다."' ERR
 
 ROS_DISTRO=humble
 WS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -230,8 +234,12 @@ ros_repo_ok() {
 }
 
 disable_duplicate_ros_sources_if_official() {
-    # 공식 설정이 이미 있다면, 다른 이름으로 남은 중복 항목이 문제일 수 있습니다
-    [ -f "$APT_ETC/sources.list.d/ros2.sources" ] && disable_duplicate_ros_sources
+    # 공식 설정이 이미 있다면, 다른 이름으로 남은 중복 항목이 문제일 수 있습니다.
+    # 주의: '[ 조건 ] && 명령' 을 함수 마지막 줄에 두면 조건이 거짓일 때 함수가
+    #       실패로 끝나 set -e 가 스크립트를 조용히 멈춥니다. 반드시 if 로 씁니다.
+    if [ -f "$APT_ETC/sources.list.d/ros2.sources" ]; then
+        disable_duplicate_ros_sources
+    fi
 }
 
 disable_duplicate_ros_sources_if_official
@@ -297,8 +305,25 @@ install_mavros_from_snapshot() {
     echo "  ✅ mavros 설치 및 버전 고정: ${args[*]}"
 }
 
+mavros_upstream() {
+    # '2.14.0-1jammy.20260804...' → '2.14.0' (설치되지 않았으면 빈 값)
+    dpkg-query -W -f='${Version}' "$1" 2>/dev/null | cut -d- -f1 || true
+}
+
 if dpkg -s "ros-$ROS_DISTRO-mavros" > /dev/null 2>&1; then
     echo "  mavros 이미 설치됨 ($(dpkg-query -W -f='${Version}' ros-$ROS_DISTRO-mavros))"
+    # mavros 와 mavros_msgs 는 함께 빌드된 짝입니다. 저장소에 mavros_msgs 만 새 버전이
+    # 올라와 apt upgrade 로 이것만 올라가면 버전이 어긋납니다 (2.14.0 + 2.15.1 등).
+    MAV_V=$(mavros_upstream "ros-$ROS_DISTRO-mavros")
+    MSG_V=$(mavros_upstream "ros-$ROS_DISTRO-mavros-msgs")
+    if [ -n "$MSG_V" ] && [ "$MAV_V" != "$MSG_V" ]; then
+        echo "  ⚠ mavros($MAV_V) 와 mavros_msgs($MSG_V) 버전이 어긋나 있습니다 — 짝을 맞춥니다"
+        if ( install_mavros_from_snapshot ); then
+            echo "  ✅ mavros 네 패키지 버전 일치"
+        else
+            echo "  ⚠ 짝 맞추기 실패 — 기존 상태로 계속합니다 (FC 데이터가 이상하면 알려주세요)"
+        fi
+    fi
     if ! ros_pkg_available; then
         # 저장소에 mavros 가 없는 동안 apt upgrade 를 하면 mavros_msgs 만 올라가
         # 설치된 mavros 와 짝이 깨질 수 있으므로 현재 버전을 고정합니다.
