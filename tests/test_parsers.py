@@ -58,6 +58,8 @@ def _stub_if_missing():
         m = mod('std_msgs.msg'); mod('std_msgs')
         for n in ('String', 'Float32', 'Int32', 'Bool', 'UInt8MultiArray', 'Header'):
             setattr(m, n, type(n, (), {}))
+    if need('mavros_msgs.msg'):
+        mod('mavros_msgs'); mod('mavros_msgs.msg').State = type('State', (), {})
     if need('rosidl_runtime_py.utilities'):
         mod('rosidl_runtime_py'); mod('rosidl_runtime_py.utilities').get_message = lambda t: None
     if need('ament_index_python.packages'):
@@ -107,6 +109,7 @@ def prod(key):
         'ab':   ('scripts/analyze_bag.py',),
         'sa':   ('scripts/serial_autodetect.py',),
         'vb':   ('scripts/verify_bag.py',),
+        'mon':  ('scripts/monitor_node.py',),
     }
     if key not in _cache:
         _cache[key] = _load(f'prod_{key}', *paths[key])
@@ -724,6 +727,60 @@ class TestLocaleIndependence(unittest.TestCase):
         src = self._script('check_time_sync.sh')
         self.assertNotIn('System clock synchronized', src.replace('# ', '#'),
                          'timedatectl 문구는 언어에 따라 바뀜 — show -p NTPSynchronized 사용')
+
+
+class TestMonitorRender(unittest.TestCase):
+    """
+    모니터 화면이 데이터 도착 순서와 무관하게 그려져야 함
+
+    상태 토픽은 1~5초 간격으로 따로 도착하므로, 첫 화면에는 대부분 비어 있습니다.
+    예전에 '전원 차단 가능' 표시가 비어 있는 녹화 상태를 읽다 오류가 났고,
+    별도 화면 때문에 메시지도 사라져 monitor_drone 이 아무 말 없이 꺼졌습니다.
+    """
+
+    def _node(self):
+        mn = prod('mon')
+        n = object.__new__(mn.MonitorNode)
+        n._init_state(color=False)
+        n.save_dir = tempfile.mkdtemp()
+        n.onboard_log = os.path.join(n.save_dir, 'onboard.log')
+        n.ros_log_dir = n.save_dir
+        return n
+
+    PARTS = {
+        '_state':  types.SimpleNamespace(connected=True, armed=False, mode='STABILIZE'),
+        '_record': {'recording': False, 'free_gb': 300.0, 'safe_power_off': True},
+        '_health': {'all_ok': True, 'groups': {'FC': 'OK', 'ReSpeaker': 'OK', 'THL100': 'OK', 'WCM6800': 'OK'},
+                    'hz': {'FC': 50.0, 'ReSpeaker': 25.0, 'THL100': 1.0, 'WCM6800': 10.0}},
+        '_fcm':    {'phase': 'SEARCHING', 'port': None, 'baud': None, 'tgt': None, 'self_id': None,
+                    'restarts': 0, 'note': '', 'autopilots': []},
+    }
+
+    def test_first_screen_without_data(self):
+        out = self._node()._render()
+        self.assertNotIn('표시 오류', out)
+        for title in ('FC 상태', '녹화 상태', '센서 연결', '최근 로그', '최근 녹화 3건'):
+            self.assertIn(title, out)
+
+    def test_every_arrival_combination(self):
+        import itertools, time
+        for r in range(len(self.PARTS) + 1):
+            for combo in itertools.combinations(self.PARTS, r):
+                n = self._node()
+                for k in combo:
+                    setattr(n, k, self.PARTS[k])
+                    if k == '_state':
+                        n._state_t = time.monotonic()
+                    if k == '_health':
+                        n._health_t = time.monotonic()
+                self.assertNotIn('표시 오류', n._render(), f'도착 조합 {combo}')
+
+    def test_section_error_does_not_stop_monitor(self):
+        n = self._node()
+        n._section_sensors = lambda: 1 / 0
+        out = n._render()
+        self.assertIn('표시 오류', out)
+        self.assertIn('최근 녹화 3건', out)      # 다른 섹션은 계속 그려짐
 
 
 class TestVerifyBag(unittest.TestCase):

@@ -267,6 +267,7 @@ FC 연결과 녹화 대기 상태가 자동으로 잡히면 완료입니다. 이
 | `Unable to locate package ros-humble-mavros` (다른 ROS 패키지는 설치됨) | **2026-09 현재 Humble 저장소에서 mavros·mavros_extras·libmavconn이 빠짐** ([mavlink/mavros#2293](https://github.com/mavlink/mavros/issues/2293)) | `install.sh`가 ROS 공식 스냅샷(2026-08-07)에서 네 패키지를 같은 버전으로 설치하고 고정(hold). 다른 날짜: `MAVROS_SNAPSHOT=YYYY-MM-DD bash install.sh` |
 | `Unable to locate package ros-humble-*` (전부) | ROS2 apt 저장소가 없거나, 예전 방식의 키가 만료됐거나, **같은 저장소가 다른 키로 중복 등록**됨 | `install.sh`가 자동 처리: 공식 방식(ros2-apt-source)으로 설정 → 중복 항목은 `.disabled-by-anomaly`로 이름을 바꿔 보관(삭제 아님) → 목록 재수신. 그래도 안 되면 apt의 실제 오류와 등록된 ROS 저장소를 보여줍니다 |
 | 저장소가 정상인데 `ROS 패키지를 찾을 수 없습니다` (한국어 PC) | apt 출력이 언어를 따라 `Candidate:` → `후보:`로 바뀌어 판정 실패 (이전 버전) | 출력 해석 시 언어를 영어로 고정 (적용됨) |
+| `monitor_drone`이 창 없이 바로 터미널로 돌아옴 (이전 버전) | 첫 화면에서 녹화 상태가 아직 없을 때 '전원 차단' 표시가 오류를 냈고, 별도 화면 때문에 메시지도 사라짐 | 수정됨. 이제 한 칸에서 오류가 나도 그 칸에만 표시되고, 종료될 때는 원래 화면으로 돌아온 뒤 오류를 보여줌 |
 | `update_drone: 명령을 찾을 수 없습니다` | `update_drone` 추가 전에 설치한 모듈 | `bash install.sh && source ~/.bashrc` 한 번 실행 |
 | 설치 직후 시리얼 권한 오류 | `fix_permissions` 실행 (재로그인 불필요) |
 | `monitor_drone`에 아무것도 안 보임 | `echo $ROS_DOMAIN_ID` 가 `0` 인지 |

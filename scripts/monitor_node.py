@@ -41,6 +41,7 @@ import glob
 import time
 import shutil
 import threading
+import traceback
 import unicodedata
 
 import rclpy
@@ -114,6 +115,19 @@ class MonitorNode(Node):
     def __init__(self, interval=3.0, show_log=True, log_lines=6,
                  once=False, color=True):
         super().__init__('monitor_node')
+        self._init_state(interval, show_log, log_lines, once, color)
+
+        # ── 구독: 저주기 4종 ──────────────────────────────────────────
+        self.create_subscription(State,  '/mavros/state',       self._cb_state,  MAVROS_QOS)
+        self.create_subscription(String, '/auto_record/status', self._cb_record, 10)
+        self.create_subscription(String, '/sensor_health',      self._cb_health, 10)
+        self.create_subscription(String, '/fcu_manager/status', self._cb_fcm,    10)
+
+        # --once 는 데이터가 모일 때까지 짧은 주기로 확인 후 한 번만 출력
+        self.create_timer(0.5 if once else interval, self._tick)
+
+    def _init_state(self, interval=3.0, show_log=True, log_lines=6, once=False, color=True):
+        """ROS 와 무관한 상태 초기화 (테스트에서 노드 없이 화면을 검사할 수 있게 분리)"""
 
         self.interval  = interval
         self.show_log  = show_log
@@ -139,16 +153,7 @@ class MonitorNode(Node):
 
         self._log_cache, self._log_time, self._log_src = [], 0.0, ''
         self._rec_cache, self._rec_time = [], 0.0
-
-        # ── 구독: 저주기 4종 ──────────────────────────────────────────
-        self.create_subscription(State,  '/mavros/state',       self._cb_state,  MAVROS_QOS)
-        self.create_subscription(String, '/auto_record/status', self._cb_record, 10)
-        self.create_subscription(String, '/sensor_health',      self._cb_health, 10)
-        self.create_subscription(String, '/fcu_manager/status', self._cb_fcm,    10)
-
         self._start = time.monotonic()
-        # --once 는 데이터가 모일 때까지 짧은 주기로 확인 후 한 번만 출력
-        self.create_timer(0.5 if once else interval, self._tick)
 
     # ══════════════════════════════════════════════════════════════════
     # 콜백
@@ -203,15 +208,27 @@ class MonitorNode(Node):
         up = (time.monotonic() - self._start) / 60
         out.append(f"  {c.dim}{now}   갱신 {self.interval:g}초   실행 {up:.0f}분{c.reset}")
         out.append('')
-        out += self._section_fc();      out.append('')
-        out += self._section_record();  out.append('')
-        out += self._section_sensors()
+        out += self._safe(self._section_fc, 'FC 상태');          out.append('')
+        out += self._safe(self._section_record, '녹화 상태');    out.append('')
+        out += self._safe(self._section_sensors, '센서 연결')
         if self.show_log:
             out.append('')
-            out += self._section_log()
+            out += self._safe(self._section_log, '최근 로그')
         out.append('')
-        out += self._section_recent()
+        out += self._safe(self._section_recent, '최근 녹화 3건')
         return '\n'.join(out)
+
+    def _safe(self, section, title):
+        """
+        한 섹션에서 오류가 나도 모니터 전체가 꺼지지 않게 합니다.
+        (예전에는 첫 화면에서 데이터가 아직 없을 때 오류로 즉시 종료됐습니다)
+        """
+        try:
+            return section()
+        except Exception as e:
+            return [self._top(title),
+                    f"│  {self.c.red}표시 오류: {type(e).__name__}: {e}{self.c.reset}",
+                    self._bottom()]
 
     def _top(self, title):
         return f"┌─ {title} " + "─" * max(0, W - _dw(title) - 4)
@@ -280,7 +297,10 @@ class MonitorNode(Node):
 
         # 전원을 내려도 되는 시점 — disarm 후에도 몇 초간은 녹화가 이어지므로
         # 그 사이에 전원을 끊으면 마지막 bag 이 마감되지 못합니다.
-        if rec.get('recording'):
+        # (녹화 상태가 아직 도착하지 않았으면 rec 이 None 입니다)
+        if rec is None:
+            pass
+        elif rec.get('recording'):
             o.append(f"│  {c.red}⚠ 녹화 중 — 전원을 내리지 마세요{c.reset}")
         elif rec.get('safe_power_off'):
             o.append(f"│  {c.green}저장 완료 — 전원 차단 가능{c.reset}")
@@ -499,10 +519,16 @@ def main():
     # top/htop 처럼 별도 화면을 씁니다. 종료하면 원래 터미널 내용이 그대로 돌아오고
     # 갱신 화면이 스크롤백에 쌓이지 않습니다.
     alt = not once and sys.stdout.isatty()
+    try:
+        rclpy.init()
+    except Exception as e:
+        print(f'[monitor_drone] ROS 초기화 실패: {e}\n'
+              f'  ROS 환경이 로드됐는지 확인하세요: source ~/anomaly_sensor_ros2/install/setup.bash',
+              file=sys.stderr)
+        sys.exit(1)
+
     if alt:
         sys.stdout.write('\033[?1049h\033[?25l'); sys.stdout.flush()
-
-    rclpy.init()
     node = None
     try:
         node = MonitorNode(interval=interval, show_log=show_log,
@@ -510,15 +536,22 @@ def main():
         rclpy.spin(node)
     except (KeyboardInterrupt, SystemExit):
         pass
-    except Exception as e:
-        print(f'[ERROR] {e}')
+    except Exception:
+        error = traceback.format_exc()
+    else:
+        error = None
     finally:
+        # 별도 화면에서 오류를 출력하면 원래 화면으로 돌아올 때 함께 사라져,
+        # 아무 메시지 없이 종료된 것처럼 보입니다. 먼저 화면을 되돌립니다.
         if alt:
             sys.stdout.write('\033[?25h\033[?1049l'); sys.stdout.flush()
         if node:
             node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+    if locals().get('error'):
+        print('[monitor_drone] 오류로 종료했습니다:\n' + error, file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':
